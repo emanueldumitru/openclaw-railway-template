@@ -80,3 +80,21 @@ docker run --rm -p 8080:8080 \
 # Setup wizard: http://localhost:8080/setup (password: test)
 # Web terminal: http://localhost:8080/tui (after setup)
 ```
+
+## FAQ
+
+**Q: I see "gateway disconnected" or authentication errors in the Control UI. What should I do?**
+
+A: Go back to `/setup` and click the "Open OpenClaw UI" button from there. The setup page passes the required auth token to the UI. Accessing the UI directly without the token will cause connection errors.
+
+**Q: I don't see the TUI option on the setup page.**
+
+A: Make sure `ENABLE_WEB_TUI=true` is set in your Railway Variables and redeploy. The web terminal is disabled by default.
+
+**Q: How do I approve pairing for Telegram or Discord?**
+
+A: Go to `/setup` and use the "Approve Pairing" dialog to approve pending pairing requests from your chat channels.
+
+## Support
+
+Need help? [Request support on Railway Station](https://station.railway.com/all-templates/d0880c01-2cc5-462c-8b76-d84c1a203348)
