@@ -1210,12 +1210,6 @@ const server = app.listen(PORT, () => {
       } catch (err) {
         console.warn(`[wrapper] doctor --fix failed: ${err.message}`);
       }
-      const synced = await syncGatewayConfigForProxy({
-        logPrefix: "[wrapper-config]",
-      });
-      if (synced.output) {
-        console.log(synced.output.trimEnd());
-      }
       await ensureGatewayRunning();
     })().catch((err) => {
       console.error(`[wrapper] failed to start gateway at boot: ${err.message}`);
