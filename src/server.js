@@ -186,6 +186,44 @@ async function waitForGatewayReady(opts = {}) {
   return false;
 }
 
+async function ensureGatewayConfig() {
+  if (!isConfigured()) return;
+  console.log("[gateway] enforcing critical config settings...");
+
+  const results = await Promise.all([
+    runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "config",
+        "set",
+        "--json",
+        "gateway.controlUi.allowInsecureAuth",
+        "true",
+      ]),
+    ),
+    runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]),
+    ),
+    runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "config",
+        "set",
+        "--json",
+        "gateway.trustedProxies",
+        '["127.0.0.1"]',
+      ]),
+    ),
+  ]);
+
+  for (const r of results) {
+    if (r.code !== 0) {
+      console.warn(`[gateway] config enforcement warning: ${r.output}`);
+    }
+  }
+}
+
 async function startGateway() {
   if (gatewayProc) return;
   if (!isConfigured()) throw new Error("Gateway cannot start: not configured");
@@ -193,6 +231,8 @@ async function startGateway() {
 
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+
+  await ensureGatewayConfig();
 
   for (const lockPath of [
     path.join(STATE_DIR, "gateway.lock"),
@@ -755,8 +795,41 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
 
     if (ok) {
       extra += "\n[setup] Configuring gateway settings...\n";
-      const synced = await syncGatewayConfigForProxy({ logPrefix: "[setup-config]" });
-      extra += synced.output;
+
+      const allowInsecureResult = await runCmd(
+        OPENCLAW_NODE,
+        clawArgs([
+          "config",
+          "set",
+          "--json",
+          "gateway.controlUi.allowInsecureAuth",
+          "true",
+        ]),
+      );
+      extra += `[config] gateway.controlUi.allowInsecureAuth=true exit=${allowInsecureResult.code}\n`;
+
+      const tokenResult = await runCmd(
+        OPENCLAW_NODE,
+        clawArgs([
+          "config",
+          "set",
+          "gateway.auth.token",
+          OPENCLAW_GATEWAY_TOKEN,
+        ]),
+      );
+      extra += `[config] gateway.auth.token exit=${tokenResult.code}\n`;
+
+      const proxiesResult = await runCmd(
+        OPENCLAW_NODE,
+        clawArgs([
+          "config",
+          "set",
+          "--json",
+          "gateway.trustedProxies",
+          '["127.0.0.1"]',
+        ]),
+      );
+      extra += `[config] gateway.trustedProxies exit=${proxiesResult.code}\n`;
 
       if (payload.model?.trim()) {
         extra += `[setup] Setting model to ${payload.model.trim()}...\n`;
@@ -1047,7 +1120,7 @@ const proxy = httpProxy.createProxyServer({
   timeout: 120_000,
 });
 
-proxy.on("error", (err, _req, res) => {
+proxy.on("error", (err, _req, resOrSocket) => {
   if (isConnRefusedError(err)) {
     console.warn(
       `[proxy] gateway connection refused at ${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}`,
@@ -1057,17 +1130,24 @@ proxy.on("error", (err, _req, res) => {
   } else {
     console.error("[proxy]", err);
   }
-  if (res && typeof res.headersSent !== "undefined" && !res.headersSent) {
-    res.writeHead(503, { "Content-Type": "text/html" });
+
+  if (
+    resOrSocket &&
+    typeof resOrSocket.headersSent !== "undefined" &&
+    !resOrSocket.headersSent
+  ) {
+    resOrSocket.writeHead(503, { "Content-Type": "text/html" });
     try {
       const html = fs.readFileSync(
         path.join(process.cwd(), "src", "public", "loading.html"),
         "utf8",
       );
-      res.end(html);
+      resOrSocket.end(html);
     } catch {
-      res.end("Gateway unavailable. Retrying...");
+      resOrSocket.end("Gateway unavailable. Retrying...");
     }
+  } else if (resOrSocket && typeof resOrSocket.destroy === "function") {
+    resOrSocket.destroy();
   }
 });
 
@@ -1102,8 +1182,13 @@ app.use(async (req, res) => {
     }
   }
 
-  if (req.path === "/openclaw" && !req.query.token) {
-    return res.redirect(`/openclaw?token=${OPENCLAW_GATEWAY_TOKEN}`);
+  if (
+    req.path.startsWith("/openclaw") &&
+    !req.query.token &&
+    !/\.\w+$/.test(req.path)
+  ) {
+    const separator = req.url.includes("?") ? "&" : "?";
+    return res.redirect(`${req.path}${separator}token=${OPENCLAW_GATEWAY_TOKEN}`);
   }
 
   return proxy.web(req, res, { target: GATEWAY_TARGET });
