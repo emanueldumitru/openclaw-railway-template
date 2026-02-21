@@ -73,6 +73,8 @@ const GATEWAY_TARGET = `http://${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}
 const OPENCLAW_ENTRY =
   process.env.OPENCLAW_ENTRY?.trim() || "/openclaw/dist/entry.js";
 const OPENCLAW_NODE = process.env.OPENCLAW_NODE?.trim() || "node";
+const DISABLE_CONTROL_UI_DEVICE_AUTH =
+  process.env.OPENCLAW_DISABLE_DEVICE_AUTH?.toLowerCase() !== "false";
 
 const ENABLE_WEB_TUI = process.env.ENABLE_WEB_TUI?.toLowerCase() === "true";
 const TUI_IDLE_TIMEOUT_MS = Number.parseInt(
@@ -647,6 +649,67 @@ function runCmd(cmd, args, opts = {}) {
   });
 }
 
+async function syncGatewayConfigForProxy(opts = {}) {
+  if (!isConfigured()) {
+    return { ok: false, skipped: true, output: "" };
+  }
+
+  const logPrefix = opts.logPrefix || "[gateway-config]";
+  let output = "";
+  const checks = [];
+
+  async function runSetting(label, args) {
+    const result = await runCmd(OPENCLAW_NODE, clawArgs(args));
+    checks.push(result.code === 0);
+    output += `${logPrefix} ${label} exit=${result.code}\n`;
+    if (result.code !== 0 && result.output?.trim()) {
+      output += `${result.output.trim()}\n`;
+    }
+    return result;
+  }
+
+  await runSetting("gateway.controlUi.allowInsecureAuth=true", [
+    "config",
+    "set",
+    "gateway.controlUi.allowInsecureAuth",
+    "true",
+  ]);
+
+  await runSetting(
+    `gateway.controlUi.dangerouslyDisableDeviceAuth=${String(DISABLE_CONTROL_UI_DEVICE_AUTH)}`,
+    [
+      "config",
+      "set",
+      "gateway.controlUi.dangerouslyDisableDeviceAuth",
+      String(DISABLE_CONTROL_UI_DEVICE_AUTH),
+    ],
+  );
+
+  await runSetting("gateway.auth.mode=token", [
+    "config",
+    "set",
+    "gateway.auth.mode",
+    "token",
+  ]);
+
+  await runSetting("gateway.auth.token", [
+    "config",
+    "set",
+    "gateway.auth.token",
+    OPENCLAW_GATEWAY_TOKEN,
+  ]);
+
+  await runSetting("gateway.trustedProxies=[127.0.0.1,::1]", [
+    "config",
+    "set",
+    "--json",
+    "gateway.trustedProxies",
+    '["127.0.0.1","::1"]',
+  ]);
+
+  return { ok: checks.every(Boolean), skipped: false, output };
+}
+
 const VALID_FLOWS = ["quickstart", "advanced", "manual"];
 const VALID_AUTH_CHOICES = [
   "codex-cli",
@@ -698,11 +761,19 @@ function validatePayload(payload) {
 app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   try {
     if (isConfigured()) {
-      await ensureGatewayRunning();
+      const synced = await syncGatewayConfigForProxy({ logPrefix: "[setup-config]" });
+      await restartGateway();
       return res.json({
         ok: true,
-        output:
-          "Already configured.\nUse Reset setup if you want to rerun onboarding.\n",
+        output: [
+          "Already configured.",
+          "Applied compatibility gateway settings for reverse proxy mode.",
+          "Gateway restarted.",
+          "",
+          synced.output.trim(),
+        ]
+          .filter(Boolean)
+          .join("\n"),
       });
     }
 
@@ -851,6 +922,7 @@ app.get("/setup/api/debug", requireSetupAuth, async (_req, res) => {
       gatewayTokenPersisted: fs.existsSync(
         path.join(STATE_DIR, "gateway.token"),
       ),
+      disableControlUiDeviceAuth: DISABLE_CONTROL_UI_DEVICE_AUTH,
       railwayCommit: process.env.RAILWAY_GIT_COMMIT_SHA || null,
     },
     openclaw: {
@@ -1137,6 +1209,12 @@ const server = app.listen(PORT, () => {
         if (dr.output) console.log(dr.output);
       } catch (err) {
         console.warn(`[wrapper] doctor --fix failed: ${err.message}`);
+      }
+      const synced = await syncGatewayConfigForProxy({
+        logPrefix: "[wrapper-config]",
+      });
+      if (synced.output) {
+        console.log(synced.output.trimEnd());
       }
       await ensureGatewayRunning();
     })().catch((err) => {
