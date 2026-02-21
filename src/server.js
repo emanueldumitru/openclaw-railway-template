@@ -184,6 +184,44 @@ async function waitForGatewayReady(opts = {}) {
   return false;
 }
 
+async function ensureGatewayConfig() {
+  if (!isConfigured()) return;
+  console.log("[gateway] enforcing critical config settings...");
+
+  const results = await Promise.all([
+    runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "config",
+        "set",
+        "--json",
+        "gateway.controlUi.allowInsecureAuth",
+        "true",
+      ]),
+    ),
+    runCmd(
+      OPENCLAW_NODE,
+      clawArgs(["config", "set", "gateway.auth.token", OPENCLAW_GATEWAY_TOKEN]),
+    ),
+    runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "config",
+        "set",
+        "--json",
+        "gateway.trustedProxies",
+        '["127.0.0.1"]',
+      ]),
+    ),
+  ]);
+
+  for (const r of results) {
+    if (r.code !== 0) {
+      console.warn(`[gateway] config enforcement warning: ${r.output}`);
+    }
+  }
+}
+
 async function startGateway() {
   if (gatewayProc) return;
   if (!isConfigured()) throw new Error("Gateway cannot start: not configured");
@@ -191,6 +229,8 @@ async function startGateway() {
 
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+
+  await ensureGatewayConfig();
 
   for (const lockPath of [
     path.join(STATE_DIR, "gateway.lock"),
@@ -690,6 +730,7 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         clawArgs([
           "config",
           "set",
+          "--json",
           "gateway.controlUi.allowInsecureAuth",
           "true",
         ]),
@@ -1007,7 +1048,7 @@ const proxy = httpProxy.createProxyServer({
   timeout: 120_000,
 });
 
-proxy.on("error", (err, _req, res) => {
+proxy.on("error", (err, _req, resOrSocket) => {
   if (isConnRefusedError(err)) {
     console.warn(
       `[proxy] gateway connection refused at ${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}`,
@@ -1017,17 +1058,24 @@ proxy.on("error", (err, _req, res) => {
   } else {
     console.error("[proxy]", err);
   }
-  if (res && typeof res.headersSent !== "undefined" && !res.headersSent) {
-    res.writeHead(503, { "Content-Type": "text/html" });
+
+  if (
+    resOrSocket &&
+    typeof resOrSocket.headersSent !== "undefined" &&
+    !resOrSocket.headersSent
+  ) {
+    resOrSocket.writeHead(503, { "Content-Type": "text/html" });
     try {
       const html = fs.readFileSync(
         path.join(process.cwd(), "src", "public", "loading.html"),
         "utf8",
       );
-      res.end(html);
+      resOrSocket.end(html);
     } catch {
-      res.end("Gateway unavailable. Retrying...");
+      resOrSocket.end("Gateway unavailable. Retrying...");
     }
+  } else if (resOrSocket && typeof resOrSocket.destroy === "function") {
+    resOrSocket.destroy();
   }
 });
 
