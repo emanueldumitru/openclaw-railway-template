@@ -9,9 +9,14 @@ RUN apt-get update \
     procps \
     python3 \
     build-essential \
+    libsecret-1-0 \
+    libsecret-1-dev \
+    btop \
+    htop \
+    vim \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@latest
+RUN npm install -g openclaw@latest mcporter
 
 WORKDIR /app
 
@@ -26,6 +31,32 @@ RUN useradd -m -s /bin/bash openclaw \
   && mkdir -p /data && chown openclaw:openclaw /data \
   && mkdir -p /home/linuxbrew/.linuxbrew && chown -R openclaw:openclaw /home/linuxbrew
 
+# Create mcporter config directories for both users
+RUN mkdir -p /home/openclaw/.mcporter \
+  && mkdir -p /root/.mcporter \
+  && mkdir -p /root/.config/google-workspace-mcp \
+  && mkdir -p /home/openclaw/.config/google-workspace-mcp \
+  && chown -R openclaw:openclaw /home/openclaw/.mcporter \
+  && chown -R openclaw:openclaw /home/openclaw/.config
+
+# mcporter config for google-workspace MCP (uses env vars set in Railway)
+RUN echo '{\n\
+  "mcpServers": {\n\
+    "google-workspace": {\n\
+      "command": "npx",\n\
+      "args": ["-y", "google-workspace-mcp-server"],\n\
+      "env": {\n\
+        "GOOGLE_CLIENT_ID": "${GOOGLE_CLIENT_ID}",\n\
+        "GOOGLE_CLIENT_SECRET": "${GOOGLE_CLIENT_SECRET}",\n\
+        "GOOGLE_REFRESH_TOKEN": "${GOOGLE_REFRESH_TOKEN}"\n\
+      }\n\
+    }\n\
+  },\n\
+  "imports": []\n\
+}' > /home/openclaw/.mcporter/mcporter.json \
+  && cp /home/openclaw/.mcporter/mcporter.json /root/.mcporter/mcporter.json \
+  && chown openclaw:openclaw /home/openclaw/.mcporter/mcporter.json
+
 USER openclaw
 RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
@@ -33,6 +64,7 @@ ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}
 ENV HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
 ENV HOMEBREW_CELLAR="/home/linuxbrew/.linuxbrew/Cellar"
 ENV HOMEBREW_REPOSITORY="/home/linuxbrew/.linuxbrew/Homebrew"
+ENV DBUS_SESSION_BUS_ADDRESS="disabled:"
 
 ENV PORT=8080
 ENV OPENCLAW_ENTRY=/usr/local/lib/node_modules/openclaw/dist/entry.js
