@@ -105,16 +105,55 @@ function isConfigured() {
 
 let gatewayProc = null;
 let gatewayStarting = null;
+let gatewayHealthy = false;
+let gatewayRecovery = null;
+let lastGatewayRecoveryAt = 0;
 let shuttingDown = false;
+const GATEWAY_RECOVERY_COOLDOWN_MS = 5000;
 
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+function isConnRefusedError(err) {
+  return err?.code === "ECONNREFUSED" || err?.cause?.code === "ECONNREFUSED";
+}
+
+function requestGatewayRecovery(reason) {
+  if (shuttingDown || !isConfigured()) return;
+  if (gatewayRecovery) return;
+
+  const now = Date.now();
+  if (now - lastGatewayRecoveryAt < GATEWAY_RECOVERY_COOLDOWN_MS) return;
+  lastGatewayRecoveryAt = now;
+
+  gatewayRecovery = (async () => {
+    try {
+      console.warn(`[gateway] recovery requested: ${reason}`);
+      gatewayHealthy = false;
+      if (gatewayProc) {
+        try {
+          gatewayProc.kill("SIGTERM");
+        } catch (err) {
+          console.warn(`[gateway] recovery kill error: ${err.message}`);
+        }
+        await sleep(500);
+        gatewayProc = null;
+      }
+      await ensureGatewayRunning();
+      console.log("[gateway] recovery completed");
+    } catch (err) {
+      console.error(`[gateway] recovery failed: ${err.message}`);
+    }
+  })().finally(() => {
+    gatewayRecovery = null;
+  });
+}
+
 async function waitForGatewayReady(opts = {}) {
   const timeoutMs = opts.timeoutMs ?? 60_000;
   const start = Date.now();
-  const endpoints = ["/openclaw", "/openclaw", "/", "/health"];
+  const endpoints = ["/openclaw", "/", "/health"];
 
   while (Date.now() - start < timeoutMs) {
     for (const endpoint of endpoints) {
@@ -123,11 +162,12 @@ async function waitForGatewayReady(opts = {}) {
           method: "GET",
         });
         if (res) {
+          gatewayHealthy = true;
           console.log(`[gateway] ready at ${endpoint}`);
           return true;
         }
       } catch (err) {
-        if (err.code !== "ECONNREFUSED" && err.cause?.code !== "ECONNREFUSED") {
+        if (!isConnRefusedError(err)) {
           const msg = err.code || err.message;
           if (msg !== "fetch failed" && msg !== "UND_ERR_CONNECT_TIMEOUT") {
             console.warn(`[gateway] health check error: ${msg}`);
@@ -137,13 +177,17 @@ async function waitForGatewayReady(opts = {}) {
     }
     await sleep(250);
   }
-  console.error(`[gateway] failed to become ready after ${timeoutMs / 1000} seconds`);
+  gatewayHealthy = false;
+  console.error(
+    `[gateway] failed to become ready after ${timeoutMs / 1000} seconds`,
+  );
   return false;
 }
 
 async function startGateway() {
   if (gatewayProc) return;
   if (!isConfigured()) throw new Error("Gateway cannot start: not configured");
+  gatewayHealthy = false;
 
   fs.mkdirSync(STATE_DIR, { recursive: true });
   fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
@@ -192,11 +236,13 @@ async function startGateway() {
 
   gatewayProc.on("error", (err) => {
     console.error(`[gateway] spawn error: ${String(err)}`);
+    gatewayHealthy = false;
     gatewayProc = null;
   });
 
   gatewayProc.on("exit", (code, signal) => {
     console.error(`[gateway] exited code=${code} signal=${signal}`);
+    gatewayHealthy = false;
     gatewayProc = null;
     if (!shuttingDown && isConfigured()) {
       console.log("[gateway] scheduling auto-restart in 2s...");
@@ -213,7 +259,23 @@ async function startGateway() {
 
 async function ensureGatewayRunning() {
   if (!isConfigured()) return { ok: false, reason: "not configured" };
-  if (gatewayProc) return { ok: true };
+  if (gatewayProc && gatewayStarting === null && gatewayHealthy) {
+    return { ok: true };
+  }
+
+  if (gatewayProc && gatewayStarting === null && !gatewayHealthy) {
+    console.warn(
+      "[gateway] process exists but is marked unhealthy, restarting gateway...",
+    );
+    try {
+      gatewayProc.kill("SIGTERM");
+    } catch (err) {
+      console.warn(`[gateway] restart kill error: ${err.message}`);
+    }
+    await sleep(500);
+    gatewayProc = null;
+  }
+
   if (!gatewayStarting) {
     gatewayStarting = (async () => {
       await startGateway();
@@ -234,10 +296,11 @@ function isGatewayStarting() {
 }
 
 function isGatewayReady() {
-  return gatewayProc !== null && gatewayStarting === null;
+  return gatewayProc !== null && gatewayStarting === null && gatewayHealthy;
 }
 
 async function restartGateway() {
+  gatewayHealthy = false;
   if (gatewayProc) {
     try {
       gatewayProc.kill("SIGTERM");
@@ -945,7 +1008,15 @@ const proxy = httpProxy.createProxyServer({
 });
 
 proxy.on("error", (err, _req, res) => {
-  console.error("[proxy]", err);
+  if (isConnRefusedError(err)) {
+    console.warn(
+      `[proxy] gateway connection refused at ${INTERNAL_GATEWAY_HOST}:${INTERNAL_GATEWAY_PORT}`,
+    );
+    gatewayHealthy = false;
+    requestGatewayRecovery("proxy connection refused");
+  } else {
+    console.error("[proxy]", err);
+  }
   if (res && typeof res.headersSent !== "undefined" && !res.headersSent) {
     res.writeHead(503, { "Content-Type": "text/html" });
     try {
