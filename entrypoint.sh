@@ -27,4 +27,7 @@ JSON
 cp /home/openclaw/.mcporter/mcporter.json /root/.mcporter/mcporter.json
 chown openclaw:openclaw /home/openclaw/.mcporter/mcporter.json
 
+# Keep Control UI instance identity stable across refreshes.
+node /app/src/patch-control-ui-instance.js || true
+
 exec gosu openclaw node src/server.js
