@@ -25,25 +25,25 @@ if [ -d /app/skills ]; then
 fi
 chown -R openclaw:openclaw "$SKILLS_DIR"
 # Pull gogcli config from Railway bucket (if bucket credentials are set)
-if [ -n "$BUCKET_ENDPOINT" ] && [ -n "$BUCKET_ACCESS_KEY_ID" ]; then
+if [ -n "$AWS_ENDPOINT_URL" ] && [ -n "$AWS_ACCESS_KEY_ID" ]; then
   echo "[gog] syncing gogcli config from bucket..."
-  GOG_DIR="/home/openclaw/.config/gogcli"
-  mkdir -p "$GOG_DIR/keyring"
+  GOG_CONFIG_DIR="/home/openclaw/.config/gogcli"
+  mkdir -p "$GOG_CONFIG_DIR/keyring"
 
-  AWS_ACCESS_KEY_ID="$BUCKET_ACCESS_KEY_ID" \
-  AWS_SECRET_ACCESS_KEY="$BUCKET_SECRET_ACCESS_KEY" \
-  aws s3 sync "s3://${BUCKET_NAME}/gogcli/" "$GOG_DIR/" \
-    --endpoint-url "$BUCKET_ENDPOINT" \
-    --region "${BUCKET_REGION:-us-east-1}" \
+  AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+  AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  aws s3 sync "s3://${AWS_S3_BUCKET_NAME}/gogcli/" "$GOG_CONFIG_DIR/" \
+    --endpoint-url "$AWS_ENDPOINT_URL" \
+    --region "${AWS_DEFAULT_REGION:-us-east-1}" \
     --no-sign-request 2>/dev/null || \
-  AWS_ACCESS_KEY_ID="$BUCKET_ACCESS_KEY_ID" \
-  AWS_SECRET_ACCESS_KEY="$BUCKET_SECRET_ACCESS_KEY" \
-  aws s3 sync "s3://${BUCKET_NAME}/gogcli/" "$GOG_DIR/" \
-    --endpoint-url "$BUCKET_ENDPOINT" \
-    --region "${BUCKET_REGION:-us-east-1}" || true
+  AWS_ACCESS_KEY_ID="$AWS_ACCESS_KEY_ID" \
+  AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  aws s3 sync "s3://${AWS_S3_BUCKET_NAME}/gogcli/" "$GOG_CONFIG_DIR/" \
+    --endpoint-url "$AWS_ENDPOINT_URL" \
+    --region "${AWS_DEFAULT_REGION:-us-east-1}" || true
 
-  chown -R openclaw:openclaw "$GOG_DIR"
-  echo "[gog] gogcli config synced to $GOG_DIR"
+  chown -R openclaw:openclaw "$GOG_CONFIG_DIR"
+  echo "[gog] gogcli config synced to $GOG_CONFIG_DIR"
 fi
 
 # Ensure mcporter config never bakes literal OAuth placeholders.
