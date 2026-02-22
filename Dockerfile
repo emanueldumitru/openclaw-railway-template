@@ -8,12 +8,14 @@ RUN apt-get update \
     gosu \
     procps \
     python3 \
+    python3-pip \
     build-essential \
     libsecret-1-0 \
     libsecret-1-dev \
     btop \
     htop \
     vim \
+  && pip3 install --break-system-packages awscli \
   && rm -rf /var/lib/apt/lists/*
 
 RUN npm install -g openclaw@latest mcporter clawdhub agent-browser @steipete/summarize
