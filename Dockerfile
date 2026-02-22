@@ -40,22 +40,20 @@ RUN mkdir -p /home/openclaw/.mcporter \
   && chown -R openclaw:openclaw /home/openclaw/.mcporter \
   && chown -R openclaw:openclaw /home/openclaw/.config
 
-# mcporter config for google-workspace MCP (uses env vars set in Railway)
-RUN echo '{\n\
-  "mcpServers": {\n\
-    "google-workspace": {\n\
-      "command": "npx",\n\
-      "args": ["-y", "google-workspace-mcp-server"],\n\
-      "env": {\n\
-        "GOOGLE_CLIENT_ID": "${GOOGLE_CLIENT_ID}",\n\
-        "GOOGLE_CLIENT_SECRET": "${GOOGLE_CLIENT_SECRET}",\n\
-        "GOOGLE_REFRESH_TOKEN": "${GOOGLE_REFRESH_TOKEN}"\n\
-      }\n\
-    }\n\
-  },\n\
-  "imports": []\n\
-}' > /home/openclaw/.mcporter/mcporter.json \
-  && cp /home/openclaw/.mcporter/mcporter.json /root/.mcporter/mcporter.json \
+# mcporter config for google-workspace MCP.
+# Do not inline OAuth secrets at build-time; runtime env vars are inherited.
+RUN cat > /home/openclaw/.mcporter/mcporter.json <<'JSON'
+{
+  "mcpServers": {
+    "google-workspace": {
+      "command": "npx",
+      "args": ["-y", "google-workspace-mcp-server"]
+    }
+  },
+  "imports": []
+}
+JSON
+RUN cp /home/openclaw/.mcporter/mcporter.json /root/.mcporter/mcporter.json \
   && chown openclaw:openclaw /home/openclaw/.mcporter/mcporter.json
 
 USER openclaw
