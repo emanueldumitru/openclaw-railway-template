@@ -16,7 +16,7 @@ RUN apt-get update \
     vim \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@latest mcporter clawdhub agent-browser
+RUN npm install -g openclaw@latest mcporter clawdhub agent-browser @steipete/summarize
 
 WORKDIR /app
 
@@ -67,7 +67,6 @@ ENV DBUS_SESSION_BUS_ADDRESS="disabled:"
 
 # Install CLI tools needed by skills
 RUN brew install steipete/tap/gogcli \
-  && brew install steipete/tap/summarize \
   && brew install ffmpeg \
   && brew install gh
 
