@@ -16,7 +16,7 @@ RUN apt-get update \
     vim \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@latest mcporter
+RUN npm install -g openclaw@latest mcporter clawdhub agent-browser
 
 WORKDIR /app
 
@@ -24,6 +24,7 @@ COPY package.json pnpm-lock.yaml ./
 RUN corepack enable && pnpm install --frozen-lockfile --prod
 
 COPY src ./src
+COPY skills ./skills
 COPY entrypoint.sh ./entrypoint.sh
 
 RUN useradd -m -s /bin/bash openclaw \
@@ -65,6 +66,12 @@ ENV HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
 ENV HOMEBREW_CELLAR="/home/linuxbrew/.linuxbrew/Cellar"
 ENV HOMEBREW_REPOSITORY="/home/linuxbrew/.linuxbrew/Homebrew"
 ENV DBUS_SESSION_BUS_ADDRESS="disabled:"
+
+# Install CLI tools needed by skills
+RUN brew install steipete/tap/gogcli \
+  && brew install steipete/tap/summarize \
+  && brew install ffmpeg \
+  && brew install gh
 
 ENV PORT=8080
 ENV OPENCLAW_ENTRY=/usr/local/lib/node_modules/openclaw/dist/entry.js
