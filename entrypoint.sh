@@ -11,6 +11,19 @@ fi
 rm -rf /home/linuxbrew/.linuxbrew
 ln -sfn /data/.linuxbrew /home/linuxbrew/.linuxbrew
 
+# Seed bundled skills into the workspace skills directory
+SKILLS_DIR="${OPENCLAW_WORKSPACE_DIR:-/data/workspace}/skills"
+mkdir -p "$SKILLS_DIR"
+if [ -d /app/skills ]; then
+  for skill_dir in /app/skills/*/; do
+    skill_name="$(basename "$skill_dir")"
+    target="$SKILLS_DIR/$skill_name"
+    if [ ! -d "$target" ]; then
+      cp -a "$skill_dir" "$target"
+    fi
+  done
+fi
+chown -R openclaw:openclaw "$SKILLS_DIR"
 # Ensure mcporter config never bakes literal OAuth placeholders.
 mkdir -p /home/openclaw/.mcporter /root/.mcporter
 cat > /home/openclaw/.mcporter/mcporter.json <<'JSON'
