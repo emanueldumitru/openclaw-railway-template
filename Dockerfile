@@ -1,4 +1,7 @@
-FROM node:22-bookworm
+FROM node:24-bookworm-slim
+
+ARG OPENCLAW_VERSION=latest
+ENV NODE_ENV=production
 
 RUN apt-get update \
   && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
@@ -7,18 +10,21 @@ RUN apt-get update \
     git \
     gosu \
     procps \
-    python3 \
-    python3-pip \
+    awscli \
     build-essential \
     libsecret-1-0 \
     libsecret-1-dev \
-    btop \
-    htop \
-    vim \
-  && pip3 install --break-system-packages awscli \
   && rm -rf /var/lib/apt/lists/*
 
-RUN npm install -g openclaw@latest mcporter clawdhub agent-browser @steipete/summarize undici @tobilu/qmd
+RUN npm install -g \
+    "openclaw@${OPENCLAW_VERSION}" \
+    mcporter \
+    clawdhub \
+    agent-browser \
+    @steipete/summarize \
+    undici \
+    @tobilu/qmd \
+  && npm cache clean --force
 
 WORKDIR /app
 
@@ -70,7 +76,9 @@ ENV DBUS_SESSION_BUS_ADDRESS="disabled:"
 # Install CLI tools needed by skills
 RUN brew install steipete/tap/gogcli \
   && brew install ffmpeg \
-  && brew install gh
+  && brew install gh \
+  && brew cleanup -s \
+  && rm -rf /home/openclaw/Library/Caches/Homebrew
 
 ENV PORT=8080
 ENV OPENCLAW_ENTRY=/usr/local/lib/node_modules/openclaw/dist/entry.js
@@ -80,12 +88,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD curl -f http://localhost:8080/setup/healthz || exit 1
 
 
-RUN clawdhub install agent-browser --force
-RUN clawdhub install gog --force
-RUN clawdhub install find-skills --force
-RUN clawdhub install tavily-search --force
-RUN clawdhub install supermemory --force
-RUN clawdhub install github --force
+RUN clawdhub install agent-browser --force \
+  && clawdhub install gog --force \
+  && clawdhub install find-skills --force \
+  && clawdhub install tavily-search --force \
+  && clawdhub install supermemory --force \
+  && clawdhub install github --force
 
 
     # && clawdhub install answeroverflow \

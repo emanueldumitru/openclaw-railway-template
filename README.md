@@ -7,6 +7,7 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - **OpenClaw Gateway + Control UI** (served at `/` and `/openclaw`)
 - A friendly **Setup Wizard** at `/setup` (protected by a password)
 - Optional **Web Terminal** at `/tui` for browser-based TUI access
+- Built-in **Proactive Automations** in `/setup` (6-hour updates + daily morning briefing)
 - Persistent state via **Railway Volume** (so config/credentials/memory survive redeploys)
 
 ## How it works (high level)
@@ -62,6 +63,25 @@ The web TUI implements multiple security layers:
 | `ENABLE_WEB_TUI` | `false` | Set to `true` to enable |
 | `TUI_IDLE_TIMEOUT_MS` | `300000` (5 min) | Closes session after inactivity |
 | `TUI_MAX_SESSION_MS` | `1800000` (30 min) | Maximum session duration |
+
+## Proactive automations
+
+After setup is complete, open `/setup` and configure **Proactive Automations**.
+
+You can enable:
+
+- **Progress updates every N hours** (default 6 hours)
+- **Daily morning briefing** at your local time/timezone
+
+By default, OpenClaw tries to deliver scheduled updates to your **last active chat route**.
+If you want deterministic routing, set both:
+
+- `Delivery Channel` (for example `telegram`, `discord`, `slack`)
+- `Delivery Target` (username, ID, or channel target for that platform)
+
+These jobs are managed using OpenClaw cron and persisted in your state volume.
+
+If you migrate from older images and hit volume permission errors, set `FORCE_DATA_RECURSIVE_CHOWN=true` for one deploy, then remove it.
 
 ## Local testing
 

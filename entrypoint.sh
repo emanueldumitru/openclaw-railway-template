@@ -1,7 +1,15 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
-chown -R openclaw:openclaw /data
+mkdir -p /data
+DATA_OWNER_EXPECTED="$(id -u openclaw):$(id -g openclaw)"
+DATA_OWNER_CURRENT="$(stat -c '%u:%g' /data 2>/dev/null || true)"
+if [ "$DATA_OWNER_CURRENT" != "$DATA_OWNER_EXPECTED" ]; then
+  chown openclaw:openclaw /data
+fi
+if [ "${FORCE_DATA_RECURSIVE_CHOWN:-false}" = "true" ]; then
+  chown -R openclaw:openclaw /data
+fi
 chmod 700 /data
 
 if [ ! -d /data/.linuxbrew ]; then
@@ -10,20 +18,24 @@ fi
 
 rm -rf /home/linuxbrew/.linuxbrew
 ln -sfn /data/.linuxbrew /home/linuxbrew/.linuxbrew
+chown -h openclaw:openclaw /home/linuxbrew/.linuxbrew
 
 # Seed bundled skills into the workspace skills directory
 SKILLS_DIR="${OPENCLAW_WORKSPACE_DIR:-/data/workspace}/skills"
 mkdir -p "$SKILLS_DIR"
 if [ -d /app/skills ]; then
+  shopt -s nullglob
   for skill_dir in /app/skills/*/; do
     skill_name="$(basename "$skill_dir")"
     target="$SKILLS_DIR/$skill_name"
     if [ ! -d "$target" ]; then
       cp -a "$skill_dir" "$target"
+      chown -R openclaw:openclaw "$target"
     fi
   done
+  shopt -u nullglob
 fi
-chown -R openclaw:openclaw "$SKILLS_DIR"
+chown openclaw:openclaw "$SKILLS_DIR"
 # Pull gogcli config from Railway bucket (if bucket credentials are set)
 if [ -n "$AWS_ENDPOINT_URL" ] && [ -n "$AWS_ACCESS_KEY_ID" ]; then
   echo "[gog] syncing gogcli config from bucket..."

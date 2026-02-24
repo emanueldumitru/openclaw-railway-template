@@ -85,6 +85,33 @@ const TUI_MAX_SESSION_MS = Number.parseInt(
   process.env.TUI_MAX_SESSION_MS ?? "1800000",
   10,
 );
+const AUTOMATION_STATE_PATH = path.join(STATE_DIR, "proactive-automation.json");
+const AUTOMATION_JOB_NAMES = {
+  progress: "OpenClaw Progress Update",
+  morning: "OpenClaw Morning Briefing",
+};
+const SUPPORTED_DELIVERY_CHANNELS = new Set([
+  "telegram",
+  "discord",
+  "slack",
+  "whatsapp",
+  "signal",
+  "googlechat",
+  "mattermost",
+  "imessage",
+  "msteams",
+]);
+const DEFAULT_AUTOMATION_SETTINGS = {
+  progressEnabled: true,
+  progressEveryHours: 6,
+  progressPrompt:
+    "Review my active tasks and send a concise status update: done, in progress, blocked, and next actions.",
+  morningEnabled: true,
+  morningTime: "08:00",
+  morningTimezone: "UTC",
+  deliveryChannel: "",
+  deliveryTarget: "",
+};
 
 function clawArgs(args) {
   return [OPENCLAW_ENTRY, ...args];
@@ -572,6 +599,114 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
   });
 });
 
+app.get("/setup/api/automation/status", requireSetupAuth, async (_req, res) => {
+  if (!isConfigured()) {
+    return res.json({
+      ok: true,
+      configured: false,
+      settings: DEFAULT_AUTOMATION_SETTINGS,
+      jobs: {
+        progress: { name: AUTOMATION_JOB_NAMES.progress, id: null, active: false },
+        morning: { name: AUTOMATION_JOB_NAMES.morning, id: null, active: false },
+      },
+      deliveryChannels: Array.from(SUPPORTED_DELIVERY_CHANNELS),
+      cronSupported: false,
+      cronError: "OpenClaw is not configured yet",
+    });
+  }
+
+  const persisted = readAutomationState();
+  const settings = {
+    ...DEFAULT_AUTOMATION_SETTINGS,
+    ...(persisted?.settings || {}),
+  };
+  if (!isValidTimezone(settings.morningTimezone)) {
+    settings.morningTimezone = DEFAULT_AUTOMATION_SETTINGS.morningTimezone;
+  }
+
+  const cronList = await listCronJobs();
+  const jobs = {
+    progress: {
+      name: AUTOMATION_JOB_NAMES.progress,
+      id: persisted?.jobs?.progressJobId ?? null,
+      active: false,
+    },
+    morning: {
+      name: AUTOMATION_JOB_NAMES.morning,
+      id: persisted?.jobs?.morningJobId ?? null,
+      active: false,
+    },
+  };
+
+  if (cronList.ok) {
+    const progress =
+      cronList.jobs.find((job) => job.name === AUTOMATION_JOB_NAMES.progress) ||
+      null;
+    const morning =
+      cronList.jobs.find((job) => job.name === AUTOMATION_JOB_NAMES.morning) ||
+      null;
+
+    if (progress) {
+      jobs.progress.id = progress.id;
+      jobs.progress.active = progress.enabled !== false;
+    }
+    if (morning) {
+      jobs.morning.id = morning.id;
+      jobs.morning.active = morning.enabled !== false;
+    }
+  }
+
+  return res.json({
+    ok: true,
+    configured: true,
+    settings,
+    jobs,
+    deliveryChannels: Array.from(SUPPORTED_DELIVERY_CHANNELS),
+    cronSupported: cronList.ok,
+    cronError: cronList.ok
+      ? ""
+      : [cronList.error, cronList.output].filter(Boolean).join("\n"),
+  });
+});
+
+app.post("/setup/api/automation/configure", requireSetupAuth, async (req, res) => {
+  if (!isConfigured()) {
+    return res
+      .status(400)
+      .json({ ok: false, output: "Configure OpenClaw first, then set automations." });
+  }
+
+  const normalized = normalizeAutomationPayload(req.body || {});
+  if (normalized.error) {
+    return res.status(400).json({ ok: false, output: normalized.error });
+  }
+
+  try {
+    const configured = await configureAutomations(normalized.value);
+    const output = [
+      "Automation settings saved.",
+      "",
+      configured.output || "(no additional output)",
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    return res.json({
+      ok: true,
+      settings: configured.state.settings,
+      jobs: configured.state.jobs,
+      cronSupported: configured.cronListOk,
+      output,
+    });
+  } catch (err) {
+    console.error("[/setup/api/automation/configure] error:", err);
+    return res.status(500).json({
+      ok: false,
+      output: `Failed to configure automations: ${err.message || String(err)}`,
+    });
+  }
+});
+
 function buildOnboardArgs(payload) {
   const args = [
     "onboard",
@@ -647,6 +782,351 @@ function runCmd(cmd, args, opts = {}) {
 
     proc.on("close", (code) => resolve({ code: code ?? 0, output: out }));
   });
+}
+
+function readAutomationState() {
+  try {
+    const raw = fs.readFileSync(AUTOMATION_STATE_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeAutomationState(state) {
+  try {
+    fs.mkdirSync(path.dirname(AUTOMATION_STATE_PATH), { recursive: true });
+    fs.writeFileSync(
+      AUTOMATION_STATE_PATH,
+      `${JSON.stringify(state, null, 2)}\n`,
+      "utf8",
+    );
+  } catch (err) {
+    console.warn(`[automation] failed to persist state: ${err.message}`);
+  }
+}
+
+function parseLooseJson(output) {
+  const text = String(output || "").trim();
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch {}
+
+  const startCandidates = [text.indexOf("["), text.indexOf("{")].filter(
+    (idx) => idx >= 0,
+  );
+  if (!startCandidates.length) return null;
+  const start = Math.min(...startCandidates);
+  const end = Math.max(text.lastIndexOf("]"), text.lastIndexOf("}"));
+  if (end <= start) return null;
+
+  try {
+    return JSON.parse(text.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+function extractCronJobs(payload) {
+  const jobs = [];
+  const seen = new Set();
+
+  function walk(node, depth = 0) {
+    if (depth > 8 || node == null) return;
+    if (Array.isArray(node)) {
+      for (const item of node) walk(item, depth + 1);
+      return;
+    }
+    if (typeof node !== "object") return;
+
+    const id =
+      typeof node.jobId === "string"
+        ? node.jobId
+        : typeof node.id === "string"
+          ? node.id
+          : null;
+    const name = typeof node.name === "string" ? node.name : null;
+    if (id && name) {
+      const key = `${id}::${name}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        jobs.push({
+          id,
+          name,
+          enabled: node.enabled !== false,
+        });
+      }
+    }
+
+    for (const value of Object.values(node)) {
+      walk(value, depth + 1);
+    }
+  }
+
+  walk(payload);
+  return jobs;
+}
+
+function trimOutputBlock(output, maxChars = 1200) {
+  const text = String(output || "").trim();
+  if (!text) return "";
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}\n...(truncated ${text.length - maxChars} chars)`;
+}
+
+async function listCronJobs() {
+  const result = await runCmd(
+    OPENCLAW_NODE,
+    clawArgs(["cron", "list", "--all", "--json"]),
+  );
+
+  if (result.code !== 0) {
+    return {
+      ok: false,
+      error: `cron list failed (exit ${result.code})`,
+      output: trimOutputBlock(result.output),
+      jobs: [],
+    };
+  }
+
+  const parsed = parseLooseJson(result.output);
+  if (!parsed) {
+    return {
+      ok: false,
+      error: "cron list returned non-JSON output",
+      output: trimOutputBlock(result.output),
+      jobs: [],
+    };
+  }
+
+  return { ok: true, jobs: extractCronJobs(parsed), output: "" };
+}
+
+function isValidTimezone(timezone) {
+  if (typeof timezone !== "string" || !timezone.trim()) return false;
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone.trim() }).format(
+      new Date(),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function normalizeAutomationPayload(payload) {
+  if (!payload || typeof payload !== "object") {
+    return { error: "Invalid payload: expected JSON object" };
+  }
+
+  const progressEnabled = payload.progressEnabled !== false;
+  const morningEnabled = payload.morningEnabled !== false;
+
+  const progressEveryHours = Number.parseInt(
+    String(
+      payload.progressEveryHours ?? DEFAULT_AUTOMATION_SETTINGS.progressEveryHours,
+    ),
+    10,
+  );
+  if (
+    progressEnabled &&
+    (!Number.isInteger(progressEveryHours) ||
+      progressEveryHours < 1 ||
+      progressEveryHours > 24)
+  ) {
+    return { error: "progressEveryHours must be an integer between 1 and 24" };
+  }
+
+  const morningTime = String(
+    payload.morningTime ?? DEFAULT_AUTOMATION_SETTINGS.morningTime,
+  ).trim();
+  const timeMatch = morningTime.match(/^([01]\d|2[0-3]):([0-5]\d)$/);
+  if (morningEnabled && !timeMatch) {
+    return { error: "morningTime must match HH:MM (24-hour format)" };
+  }
+
+  const morningTimezone = String(
+    payload.morningTimezone ?? DEFAULT_AUTOMATION_SETTINGS.morningTimezone,
+  ).trim();
+  if (morningEnabled && !isValidTimezone(morningTimezone)) {
+    return { error: "morningTimezone must be a valid IANA timezone" };
+  }
+
+  const deliveryChannel = String(payload.deliveryChannel ?? "")
+    .trim()
+    .toLowerCase();
+  const deliveryTarget = String(payload.deliveryTarget ?? "").trim();
+  if (deliveryChannel && !SUPPORTED_DELIVERY_CHANNELS.has(deliveryChannel)) {
+    return {
+      error: `deliveryChannel must be one of: ${Array.from(SUPPORTED_DELIVERY_CHANNELS).join(", ")}`,
+    };
+  }
+  if ((deliveryChannel && !deliveryTarget) || (!deliveryChannel && deliveryTarget)) {
+    return {
+      error:
+        "deliveryChannel and deliveryTarget must be set together, or both left empty",
+    };
+  }
+
+  const progressPrompt = String(
+    payload.progressPrompt ?? DEFAULT_AUTOMATION_SETTINGS.progressPrompt,
+  ).trim();
+  const morningPrompt = String(
+    payload.morningPrompt ?? DEFAULT_AUTOMATION_SETTINGS.morningPrompt,
+  ).trim();
+  if (!progressPrompt) return { error: "progressPrompt cannot be empty" };
+  if (!morningPrompt) return { error: "morningPrompt cannot be empty" };
+  if (progressPrompt.length > 2000) {
+    return { error: "progressPrompt must be <= 2000 characters" };
+  }
+  if (morningPrompt.length > 2000) {
+    return { error: "morningPrompt must be <= 2000 characters" };
+  }
+
+  return {
+    value: {
+      progressEnabled,
+      progressEveryHours,
+      progressPrompt,
+      morningEnabled,
+      morningTime,
+      morningTimezone,
+      deliveryChannel,
+      deliveryTarget,
+    },
+  };
+}
+
+function buildDeliveryArgs(settings) {
+  const args = ["--announce"];
+  if (settings.deliveryChannel && settings.deliveryTarget) {
+    args.push("--channel", settings.deliveryChannel, "--to", settings.deliveryTarget);
+  }
+  return args;
+}
+
+async function removeManagedCronJobs(logLines) {
+  const toRemove = new Set();
+  const previous = readAutomationState();
+
+  if (previous?.jobs?.progressJobId) toRemove.add(previous.jobs.progressJobId);
+  if (previous?.jobs?.morningJobId) toRemove.add(previous.jobs.morningJobId);
+
+  const listed = await listCronJobs();
+  if (listed.ok) {
+    for (const job of listed.jobs) {
+      if (job.name === AUTOMATION_JOB_NAMES.progress) toRemove.add(job.id);
+      if (job.name === AUTOMATION_JOB_NAMES.morning) toRemove.add(job.id);
+    }
+  } else {
+    logLines.push(`[automation] ${listed.error}`);
+    if (listed.output) logLines.push(listed.output);
+  }
+
+  for (const id of toRemove) {
+    const removed = await runCmd(OPENCLAW_NODE, clawArgs(["cron", "rm", id]));
+    logLines.push(`[cron rm] id=${id} exit=${removed.code}`);
+    const out = trimOutputBlock(removed.output, 400);
+    if (out) logLines.push(out);
+  }
+}
+
+async function configureAutomations(settings) {
+  const logLines = [];
+  await removeManagedCronJobs(logLines);
+
+  const deliveryArgs = buildDeliveryArgs(settings);
+
+  if (settings.progressEnabled) {
+    const progress = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "cron",
+        "add",
+        "--name",
+        AUTOMATION_JOB_NAMES.progress,
+        "--every",
+        `${settings.progressEveryHours}h`,
+        "--session",
+        "isolated",
+        "--message",
+        settings.progressPrompt,
+        ...deliveryArgs,
+      ]),
+    );
+    logLines.push(`[cron add] progress exit=${progress.code}`);
+    const out = trimOutputBlock(progress.output, 600);
+    if (out) logLines.push(out);
+    if (progress.code !== 0) {
+      throw new Error("Failed to create progress update cron job");
+    }
+  }
+
+  if (settings.morningEnabled) {
+    const [hour, minute] = settings.morningTime.split(":");
+    const cronExpr = `${Number.parseInt(minute, 10)} ${Number.parseInt(hour, 10)} * * *`;
+    const morning = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "cron",
+        "add",
+        "--name",
+        AUTOMATION_JOB_NAMES.morning,
+        "--cron",
+        cronExpr,
+        "--tz",
+        settings.morningTimezone,
+        "--session",
+        "isolated",
+        "--message",
+        settings.morningPrompt,
+        ...deliveryArgs,
+      ]),
+    );
+    logLines.push(`[cron add] morning exit=${morning.code}`);
+    const out = trimOutputBlock(morning.output, 600);
+    if (out) logLines.push(out);
+    if (morning.code !== 0) {
+      throw new Error("Failed to create morning briefing cron job");
+    }
+  }
+
+  let progressJobId = null;
+  let morningJobId = null;
+  const listed = await listCronJobs();
+  if (listed.ok) {
+    progressJobId =
+      listed.jobs.find((job) => job.name === AUTOMATION_JOB_NAMES.progress)?.id ||
+      null;
+    morningJobId =
+      listed.jobs.find((job) => job.name === AUTOMATION_JOB_NAMES.morning)?.id ||
+      null;
+  } else {
+    logLines.push(`[automation] ${listed.error}`);
+    if (listed.output) logLines.push(listed.output);
+  }
+
+  const state = {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    settings,
+    jobs: {
+      progressJobId,
+      morningJobId,
+    },
+  };
+  writeAutomationState(state);
+
+  return {
+    state,
+    output: logLines.join("\n"),
+    cronListOk: listed.ok,
+    cronListError: listed.ok ? "" : listed.error,
+  };
 }
 
 async function syncGatewayConfigForProxy(opts = {}) {
@@ -952,10 +1432,19 @@ app.post("/setup/api/pairing/approve", requireSetupAuth, async (req, res) => {
 
 app.post("/setup/api/reset", requireSetupAuth, async (_req, res) => {
   try {
+    const logs = [];
+    await removeManagedCronJobs(logs);
+    fs.rmSync(AUTOMATION_STATE_PATH, { force: true });
     fs.rmSync(configPath(), { force: true });
-    res
-      .type("text/plain")
-      .send("OK - deleted config file. You can rerun setup now.");
+    res.type("text/plain").send(
+      [
+        "OK - deleted config file. You can rerun setup now.",
+        "",
+        logs.length ? logs.join("\n") : "(no automation cleanup output)",
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
   } catch (err) {
     res.status(500).type("text/plain").send(String(err));
   }

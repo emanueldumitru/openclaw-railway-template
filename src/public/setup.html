@@ -40,13 +40,34 @@
       showPairingModal: false,
       isReady: false,
       tuiEnabled: false,
+      automationReady: false,
+      automationLoading: false,
+      automationStatus: '',
+      deliveryChannels: [],
+      progressEnabled: true,
+      progressEveryHours: 6,
+      progressPrompt: 'Review my active tasks and send a concise status update: done, in progress, blocked, and next actions.',
+      morningEnabled: true,
+      morningTime: '08:00',
+      morningTimezone: 'UTC',
+      deliveryChannel: '',
+      deliveryTarget: '',
 
       get currentGroup() {
         return this.authGroups.find(g => g.value === this.selectedGroup);
       },
 
       async init() {
+        this.morningTimezone = this.browserTimezone();
         await this.refreshStatus();
+      },
+
+      browserTimezone() {
+        try {
+          return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+        } catch (_e) {
+          return 'UTC';
+        }
       },
 
       async httpJson(url, opts = {}) {
@@ -75,6 +96,11 @@
           if (j.channelsAddHelp && j.channelsAddHelp.indexOf('telegram') === -1) {
             this.log += '\nNote: this openclaw build does not list telegram in `channels add --help`. Telegram auto-add will be skipped.\n';
           }
+          if (this.configured) {
+            await this.refreshAutomationStatus();
+          } else {
+            this.automationReady = false;
+          }
           this.isReady = true;
         } catch (e) {
           this.status = 'Error: ' + String(e);
@@ -96,6 +122,91 @@
 
       prevStep() {
         if (this.step > 1) this.step--;
+      },
+
+      applyAutomationSettings(settings) {
+        const s = settings || {};
+        this.progressEnabled = s.progressEnabled !== false;
+        this.progressEveryHours = Number.isInteger(s.progressEveryHours) ? s.progressEveryHours : 6;
+        this.progressPrompt = s.progressPrompt || this.progressPrompt;
+        this.morningEnabled = s.morningEnabled !== false;
+        this.morningTime = s.morningTime || '08:00';
+        this.morningTimezone = s.morningTimezone || this.browserTimezone();
+        this.deliveryChannel = s.deliveryChannel || '';
+        this.deliveryTarget = s.deliveryTarget || '';
+      },
+
+      async refreshAutomationStatus() {
+        this.automationStatus = 'Loading proactive automations...';
+        this.automationReady = false;
+        try {
+          const j = await this.httpJson('/setup/api/automation/status');
+          this.deliveryChannels = j.deliveryChannels || [];
+          this.applyAutomationSettings(j.settings || {});
+          if (!j.cronSupported) {
+            this.automationStatus = j.cronError || 'Cron support is unavailable in this OpenClaw build.';
+          } else {
+            const enabledCount = [j.jobs?.progress?.active, j.jobs?.morning?.active].filter(Boolean).length;
+            this.automationStatus = enabledCount
+              ? `Active automation jobs: ${enabledCount}`
+              : 'No proactive jobs are active yet.';
+          }
+          this.automationReady = true;
+        } catch (e) {
+          this.automationStatus = 'Failed to load automation settings: ' + String(e);
+          this.automationReady = true;
+        }
+      },
+
+      automationPayload() {
+        return {
+          progressEnabled: !!this.progressEnabled,
+          progressEveryHours: Number(this.progressEveryHours),
+          progressPrompt: this.progressPrompt,
+          morningEnabled: !!this.morningEnabled,
+          morningTime: this.morningTime,
+          morningTimezone: this.morningTimezone || this.browserTimezone(),
+          deliveryChannel: (this.deliveryChannel || '').trim().toLowerCase(),
+          deliveryTarget: (this.deliveryTarget || '').trim()
+        };
+      },
+
+      async saveAutomations() {
+        const payload = this.automationPayload();
+        if ((payload.deliveryChannel && !payload.deliveryTarget) || (!payload.deliveryChannel && payload.deliveryTarget)) {
+          alert('Set both delivery channel and target, or leave both empty.');
+          return;
+        }
+
+        this.automationLoading = true;
+        this.log += '\nSaving proactive automations...\n';
+        try {
+          const res = await fetch('/setup/api/automation/configure', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload)
+          });
+          const text = await res.text();
+          let j;
+          try { j = JSON.parse(text); } catch (_e) { j = { ok: false, output: text }; }
+          this.log += (j.output || JSON.stringify(j, null, 2)) + '\n';
+          await this.refreshAutomationStatus();
+          if (!j.ok) {
+            alert('Automation update failed. See logs below for details.');
+          }
+        } catch (e) {
+          this.log += '\nAutomation error: ' + String(e) + '\n';
+          alert('Automation update failed: ' + String(e));
+        } finally {
+          this.automationLoading = false;
+        }
+      },
+
+      async disableAutomations() {
+        this.progressEnabled = false;
+        this.morningEnabled = false;
+        await this.saveAutomations();
       },
 
       async runSetup() {
@@ -302,6 +413,77 @@
             <button @click="resetSetup()" :disabled="loading" class="w-full mt-4 bg-red-100 dark:bg-red-900/40 hover:bg-red-200 dark:hover:bg-red-900/60 disabled:opacity-50 disabled:cursor-not-allowed text-red-700 dark:text-red-300 px-4 py-2.5 rounded-lg font-medium border border-red-300 dark:border-red-700 transition-colors">
               Reset Setup
             </button>
+          </div>
+        </div>
+
+        <div class="bg-neutral-50 dark:bg-neutral-950/60 border border-neutral-200 dark:border-neutral-800 rounded-xl p-5 mb-4">
+          <div class="flex items-start justify-between gap-4 mb-4">
+            <div>
+              <h3 class="text-base font-semibold">Proactive Automations</h3>
+              <p class="text-sm text-neutral-500 dark:text-neutral-400">Make OpenClaw message you first: periodic updates and daily morning briefings.</p>
+            </div>
+            <span x-text="automationStatus" class="text-xs text-neutral-500 dark:text-neutral-400 text-right max-w-52"></span>
+          </div>
+
+          <div x-show="automationReady" class="space-y-5">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <label class="flex items-center gap-3 rounded-lg border border-neutral-200 dark:border-neutral-800 p-3">
+                <input x-model="progressEnabled" type="checkbox" class="w-4 h-4 text-red-600 border-neutral-300 rounded focus:ring-red-500">
+                <span class="text-sm font-medium">Progress update every</span>
+                <input x-model.number="progressEveryHours" type="number" min="1" max="24" class="w-16 bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded px-2 py-1 text-sm">
+                <span class="text-sm text-neutral-500">hours</span>
+              </label>
+
+              <label class="flex items-center gap-3 rounded-lg border border-neutral-200 dark:border-neutral-800 p-3">
+                <input x-model="morningEnabled" type="checkbox" class="w-4 h-4 text-red-600 border-neutral-300 rounded focus:ring-red-500">
+                <span class="text-sm font-medium">Morning briefing at</span>
+                <input x-model="morningTime" type="time" class="bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded px-2 py-1 text-sm">
+              </label>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+              <div class="md:col-span-1">
+                <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Timezone</label>
+                <input x-model="morningTimezone" type="text" placeholder="America/New_York" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-2 text-sm">
+              </div>
+              <div class="md:col-span-1">
+                <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Delivery Channel (optional)</label>
+                <select x-model="deliveryChannel" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-2 text-sm">
+                  <option value="">Use last chat route</option>
+                  <template x-for="c in deliveryChannels" :key="c">
+                    <option :value="c" x-text="c"></option>
+                  </template>
+                </select>
+              </div>
+              <div class="md:col-span-1">
+                <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Delivery Target (optional)</label>
+                <input x-model="deliveryTarget" type="text" placeholder="@username or channel ID" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-2 text-sm">
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <div>
+                <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Progress Prompt</label>
+                <textarea x-model="progressPrompt" rows="3" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-2 text-sm"></textarea>
+              </div>
+              <div>
+                <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Morning Prompt</label>
+                <textarea x-model="morningPrompt" rows="3" class="w-full bg-white dark:bg-neutral-900 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-2 text-sm"></textarea>
+              </div>
+            </div>
+
+            <div class="flex flex-wrap gap-3">
+              <button @click="saveAutomations()" :disabled="automationLoading || loading" class="bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2.5 rounded-lg font-medium transition-colors">
+                <span x-show="!automationLoading">Save Automations</span>
+                <span x-show="automationLoading" class="flex items-center gap-2">
+                  <svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                  Saving...
+                </span>
+              </button>
+              <button @click="disableAutomations()" :disabled="automationLoading || loading" class="bg-neutral-100 dark:bg-neutral-800 hover:bg-neutral-200 dark:hover:bg-neutral-700 disabled:opacity-50 disabled:cursor-not-allowed text-neutral-700 dark:text-neutral-300 px-4 py-2.5 rounded-lg font-medium border border-neutral-300 dark:border-neutral-700 transition-colors">
+                Disable All
+              </button>
+            </div>
           </div>
         </div>
 
