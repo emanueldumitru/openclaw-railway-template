@@ -86,13 +86,12 @@ RUN GH_VERSION=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest
     && chmod +x /usr/local/bin/gh \
     && rm -rf /tmp/bin /tmp/share
 
-# gogcli — Go binary from steipete's tap
-RUN GOGCLI_VERSION=$(curl -fsSL https://api.github.com/repos/steipete/gogcli/releases/latest | grep -oP '"tag_name":\s*"v?\K[^"]+') \
-    && curl -fsSL "https://github.com/steipete/gogcli/releases/download/v${GOGCLI_VERSION}/gogcli_linux_amd64.tar.gz" \
-       | tar -xz -C /tmp \
-    && mv /tmp/gogcli /usr/local/bin/gogcli \
-    && chmod +x /usr/local/bin/gogcli \
-    && rm -rf /tmp/gogcli*
+# gogcli (binary name is "gog") — latest is v0.11.0
+RUN cd /tmp \
+    && curl -fsSL "https://github.com/steipete/gogcli/releases/download/v0.11.0/gogcli_0.11.0_linux_amd64.tar.gz" \
+       | tar -xz \
+    && install -m 0755 /tmp/gog /usr/local/bin/gog \
+    && rm -rf /tmp/gog /tmp/gogcli*
 
 USER openclaw
 
