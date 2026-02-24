@@ -80,7 +80,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD curl -f http://localhost:8080/setup/healthz || exit 1
 
 
-RUN clawdhub install agent-browser gog find-skills tavily-search supermemory github
+RUN clawdhub install agent-browser 
+RUN clawdhub install gog
+RUN clawdhub install find-skills
+RUN clawdhub install tavily-search
+RUN clawdhub install supermemory
+RUN clawdhub install github
 
 
     # && clawdhub install answeroverflow \
