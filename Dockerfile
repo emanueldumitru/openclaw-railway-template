@@ -21,6 +21,7 @@ RUN npm install -g \
     mcporter \
     clawdhub \
     agent-browser \
+    crawlee \
     @steipete/summarize \
     undici \
     @tobilu/qmd \
@@ -56,6 +57,10 @@ RUN cat > /home/openclaw/.mcporter/mcporter.json <<'JSON'
     "google-workspace": {
       "command": "npx",
       "args": ["-y", "google-workspace-mcp-server"]
+    },
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-fetch"]
     }
   },
   "imports": []
@@ -88,12 +93,12 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD curl -f http://localhost:8080/setup/healthz || exit 1
 
 
-RUN clawdhub install agent-browser --force \
-  && clawdhub install gog --force \
-  && clawdhub install find-skills --force \
-  && clawdhub install tavily-search --force \
-  && clawdhub install supermemory --force \
-  && clawdhub install github --force
+# RUN clawdhub install agent-browser --force \
+#   && clawdhub install gog --force \
+#   && clawdhub install find-skills --force \
+#   && clawdhub install tavily-search --force \
+#   && clawdhub install supermemory --force \
+#   && clawdhub install github --force
 
 
 USER root

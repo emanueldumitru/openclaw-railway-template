@@ -66,6 +66,10 @@ cat > /home/openclaw/.mcporter/mcporter.json <<'JSON'
     "google-workspace": {
       "command": "npx",
       "args": ["-y", "google-workspace-mcp-server"]
+    },
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-fetch"]
     }
   },
   "imports": []
