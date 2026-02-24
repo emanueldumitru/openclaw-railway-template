@@ -80,19 +80,21 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD curl -f http://localhost:8080/setup/healthz || exit 1
 
 
-RUN clawdhub install agent-browser \
-    && clawdhub install answeroverflow \
-    && clawdhub install brave-search \
-    && clawdhub install github \
-    && clawdhub install gog \
-    && clawdhub install model-usage \
-    && clawdhub install proactive-agent \
-    && clawdhub install self-improving-agent \
-    && clawdhub install summarize \
-    && clawdhub install tavily-search \
-    && clawdhub install video-frames \
-    && clawdhub install find-skills \
-    && clawdhub install supermemory 
+RUN clawdhub install agent-browser gog find-skills tavily-search supermemory github
+
+
+    # && clawdhub install answeroverflow \
+    # && clawdhub install brave-search \
+    # && clawdhub install github \
+    # && clawdhub install gog \
+    # && clawdhub install model-usage \
+    # && clawdhub install proactive-agent \
+    # && clawdhub install self-improving-agent \
+    # && clawdhub install summarize \
+    # && clawdhub install tavily-search \
+    # && clawdhub install video-frames \
+    # && clawdhub install find-skills \
+    # && clawdhub install supermemory 
 
 USER root
 ENTRYPOINT ["./entrypoint.sh"]
