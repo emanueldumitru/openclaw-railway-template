@@ -74,7 +74,7 @@ const OPENCLAW_ENTRY =
   process.env.OPENCLAW_ENTRY?.trim() || "/openclaw/dist/entry.js";
 const OPENCLAW_NODE = process.env.OPENCLAW_NODE?.trim() || "node";
 const DISABLE_CONTROL_UI_DEVICE_AUTH =
-  process.env.OPENCLAW_DISABLE_DEVICE_AUTH?.toLowerCase() !== "false";
+  process.env.OPENCLAW_DISABLE_DEVICE_AUTH?.toLowerCase() === "true";
 
 const ENABLE_WEB_TUI = process.env.ENABLE_WEB_TUI?.toLowerCase() === "true";
 const TUI_IDLE_TIMEOUT_MS = Number.parseInt(
