@@ -96,18 +96,5 @@ RUN clawdhub install agent-browser --force \
   && clawdhub install github --force
 
 
-    # && clawdhub install answeroverflow \
-    # && clawdhub install brave-search \
-    # && clawdhub install github \
-    # && clawdhub install gog \
-    # && clawdhub install model-usage \
-    # && clawdhub install proactive-agent \
-    # && clawdhub install self-improving-agent \
-    # && clawdhub install summarize \
-    # && clawdhub install tavily-search \
-    # && clawdhub install video-frames \
-    # && clawdhub install find-skills \
-    # && clawdhub install supermemory 
-
 USER root
 ENTRYPOINT ["./entrypoint.sh"]
