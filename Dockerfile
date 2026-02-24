@@ -69,21 +69,32 @@ JSON
 RUN cp /home/openclaw/.mcporter/mcporter.json /root/.mcporter/mcporter.json \
   && chown openclaw:openclaw /home/openclaw/.mcporter/mcporter.json
 
+# ffmpeg — static binary from johnvansickle (no deps needed)
+RUN mkdir -p /tmp/ffmpeg \
+    && curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
+       | tar -xJ --strip-components=1 -C /tmp/ffmpeg \
+    && mv /tmp/ffmpeg/ffmpeg /usr/local/bin/ffmpeg \
+    && mv /tmp/ffmpeg/ffprobe /usr/local/bin/ffprobe \
+    && chmod +x /usr/local/bin/ffmpeg /usr/local/bin/ffprobe \
+    && rm -rf /tmp/ffmpeg
+
+# gh (GitHub CLI) — official release binary
+RUN GH_VERSION=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest | grep -oP '"tag_name":\s*"v\K[^"]+') \
+    && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
+       | tar -xz --strip-components=1 -C /tmp \
+    && mv /tmp/bin/gh /usr/local/bin/gh \
+    && chmod +x /usr/local/bin/gh \
+    && rm -rf /tmp/bin /tmp/share
+
+# gogcli — Go binary from steipete's tap
+RUN GOGCLI_VERSION=$(curl -fsSL https://api.github.com/repos/steipete/gogcli/releases/latest | grep -oP '"tag_name":\s*"v?\K[^"]+') \
+    && curl -fsSL "https://github.com/steipete/gogcli/releases/download/v${GOGCLI_VERSION}/gogcli_linux_amd64.tar.gz" \
+       | tar -xz -C /tmp \
+    && mv /tmp/gogcli /usr/local/bin/gogcli \
+    && chmod +x /usr/local/bin/gogcli \
+    && rm -rf /tmp/gogcli*
+
 USER openclaw
-RUN NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-ENV PATH="/home/linuxbrew/.linuxbrew/bin:/home/linuxbrew/.linuxbrew/sbin:${PATH}"
-ENV HOMEBREW_PREFIX="/home/linuxbrew/.linuxbrew"
-ENV HOMEBREW_CELLAR="/home/linuxbrew/.linuxbrew/Cellar"
-ENV HOMEBREW_REPOSITORY="/home/linuxbrew/.linuxbrew/Homebrew"
-ENV DBUS_SESSION_BUS_ADDRESS="disabled:"
-
-# Install CLI tools needed by skills
-RUN brew install steipete/tap/gogcli \
-  && brew install ffmpeg \
-  && brew install gh \
-  && brew cleanup -s \
-  && rm -rf /home/openclaw/Library/Caches/Homebrew
 
 ENV PORT=8080
 ENV OPENCLAW_ENTRY=/usr/local/lib/node_modules/openclaw/dist/entry.js
@@ -91,14 +102,6 @@ EXPOSE 8080
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
   CMD curl -f http://localhost:8080/setup/healthz || exit 1
-
-
-# RUN clawdhub install agent-browser --force \
-#   && clawdhub install gog --force \
-#   && clawdhub install find-skills --force \
-#   && clawdhub install tavily-search --force \
-#   && clawdhub install supermemory --force \
-#   && clawdhub install github --force
 
 
 USER root
