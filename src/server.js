@@ -112,6 +112,8 @@ const DEFAULT_AUTOMATION_SETTINGS = {
   deliveryChannel: "",
   deliveryTarget: "",
 };
+const CONTROL_UI_ALLOWED_ORIGINS_ENV =
+  process.env.OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS?.trim() || "";
 
 function clawArgs(args) {
   return [OPENCLAW_ENTRY, ...args];
@@ -132,12 +134,111 @@ function isConfigured() {
   }
 }
 
+function firstHeaderValue(value) {
+  if (Array.isArray(value)) return (value[0] || "").trim();
+  if (typeof value === "string") return value.trim();
+  return "";
+}
+
+function normalizeOrigin(value) {
+  const input = String(value || "").trim();
+  if (!input) return "";
+  try {
+    return new URL(input).origin;
+  } catch {
+    return "";
+  }
+}
+
+function parseOriginList(value) {
+  const origins = new Set();
+  for (const part of String(value || "").split(/[,\s]+/)) {
+    const origin = normalizeOrigin(part);
+    if (origin) origins.add(origin);
+  }
+  return Array.from(origins);
+}
+
+function normalizeDomainHost(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  return raw.replace(/^https?:\/\//i, "").replace(/\/.*$/, "");
+}
+
+function configuredControlUiOrigins() {
+  const origins = new Set(parseOriginList(CONTROL_UI_ALLOWED_ORIGINS_ENV));
+
+  const publicUrlOrigin = normalizeOrigin(
+    process.env.OPENCLAW_PUBLIC_URL || process.env.PUBLIC_URL || "",
+  );
+  if (publicUrlOrigin) origins.add(publicUrlOrigin);
+
+  const railwayHost = normalizeDomainHost(process.env.RAILWAY_PUBLIC_DOMAIN);
+  if (railwayHost) {
+    origins.add(`https://${railwayHost}`);
+    origins.add(`http://${railwayHost}`);
+  }
+
+  return Array.from(origins);
+}
+
+function inferRequestOrigin(req) {
+  const explicitOrigin = normalizeOrigin(firstHeaderValue(req?.headers?.origin));
+  if (explicitOrigin) return explicitOrigin;
+
+  const xfProto = firstHeaderValue(req?.headers?.["x-forwarded-proto"])
+    .split(",")[0]
+    .trim();
+  const xfHost = firstHeaderValue(req?.headers?.["x-forwarded-host"])
+    .split(",")[0]
+    .trim();
+  const host = xfHost || firstHeaderValue(req?.headers?.host);
+
+  const fallbackProto =
+    typeof req?.protocol === "string" && req.protocol
+      ? req.protocol
+      : req?.socket?.encrypted
+        ? "https"
+        : "http";
+
+  if (!host) return "";
+  return normalizeOrigin(`${xfProto || fallbackProto}://${host}`);
+}
+
+function readConfiguredControlUiAllowedOrigins() {
+  try {
+    const raw = fs.readFileSync(configPath(), "utf8");
+    const parsed = JSON.parse(raw);
+    const list = parsed?.gateway?.controlUi?.allowedOrigins;
+    if (!Array.isArray(list)) return [];
+    return list
+      .map((item) => normalizeOrigin(item))
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+function buildDesiredControlUiAllowedOrigins(req) {
+  const origins = new Set(readConfiguredControlUiAllowedOrigins());
+  for (const item of configuredControlUiOrigins()) {
+    origins.add(item);
+  }
+
+  const requestOrigin = inferRequestOrigin(req);
+  if (requestOrigin) origins.add(requestOrigin);
+
+  return Array.from(origins).sort();
+}
+
 let gatewayProc = null;
 let gatewayStarting = null;
 let gatewayHealthy = false;
 let gatewayRecovery = null;
 let lastGatewayRecoveryAt = 0;
 let shuttingDown = false;
+let controlUiOriginsSync = null;
+const syncedControlUiOrigins = new Set();
 const GATEWAY_RECOVERY_COOLDOWN_MS = 5000;
 
 function sleep(ms) {
@@ -213,6 +314,91 @@ async function waitForGatewayReady(opts = {}) {
   return false;
 }
 
+async function ensureControlUiAllowedOrigins(req, opts = {}) {
+  if (!isConfigured()) {
+    return { ok: false, skipped: true, updated: false, origins: [] };
+  }
+
+  const logPrefix = opts.logPrefix || "[gateway-config]";
+  const desiredOrigins = buildDesiredControlUiAllowedOrigins(req);
+  if (!desiredOrigins.length) {
+    return { ok: true, skipped: true, updated: false, origins: [] };
+  }
+
+  if (syncedControlUiOrigins.size === 0) {
+    for (const origin of readConfiguredControlUiAllowedOrigins()) {
+      syncedControlUiOrigins.add(origin);
+    }
+  }
+
+  const knownOrigins = Array.from(syncedControlUiOrigins).sort();
+  const isAlreadySynced =
+    knownOrigins.length === desiredOrigins.length &&
+    knownOrigins.every((origin, index) => origin === desiredOrigins[index]);
+  if (isAlreadySynced) {
+    return {
+      ok: true,
+      skipped: true,
+      updated: false,
+      origins: desiredOrigins,
+    };
+  }
+
+  if (controlUiOriginsSync) {
+    const inFlight = await controlUiOriginsSync;
+    return {
+      ok: inFlight.ok,
+      skipped: true,
+      updated: false,
+      origins: desiredOrigins,
+    };
+  }
+
+  controlUiOriginsSync = (async () => {
+    const result = await runCmd(
+      OPENCLAW_NODE,
+      clawArgs([
+        "config",
+        "set",
+        "--json",
+        "gateway.controlUi.allowedOrigins",
+        JSON.stringify(desiredOrigins),
+      ]),
+    );
+
+    if (result.code !== 0) {
+      const text = trimOutputBlock(result.output, 500);
+      console.warn(
+        `${logPrefix} failed setting gateway.controlUi.allowedOrigins (exit ${result.code})${text ? `\n${text}` : ""}`,
+      );
+      return { ok: false, updated: false };
+    }
+
+    syncedControlUiOrigins.clear();
+    for (const origin of desiredOrigins) {
+      syncedControlUiOrigins.add(origin);
+    }
+    console.log(
+      `${logPrefix} gateway.controlUi.allowedOrigins=${JSON.stringify(desiredOrigins)}`,
+    );
+    return { ok: true, updated: true };
+  })().finally(() => {
+    controlUiOriginsSync = null;
+  });
+
+  const synced = await controlUiOriginsSync;
+  if (synced.ok && synced.updated && opts.restartGatewayOnChange && isGatewayReady()) {
+    await restartGateway();
+  }
+
+  return {
+    ok: synced.ok,
+    skipped: false,
+    updated: synced.updated,
+    origins: desiredOrigins,
+  };
+}
+
 async function ensureGatewayConfig() {
   if (!isConfigured()) return;
   console.log("[gateway] enforcing critical config settings...");
@@ -249,6 +435,11 @@ async function ensureGatewayConfig() {
       console.warn(`[gateway] config enforcement warning: ${r.output}`);
     }
   }
+
+  await ensureControlUiAllowedOrigins(null, {
+    logPrefix: "[gateway-config]",
+    restartGatewayOnChange: false,
+  });
 }
 
 async function startGateway() {
@@ -1187,6 +1378,15 @@ async function syncGatewayConfigForProxy(opts = {}) {
     '["127.0.0.1","::1"]',
   ]);
 
+  const originSync = await ensureControlUiAllowedOrigins(opts.req || null, {
+    logPrefix,
+    restartGatewayOnChange: false,
+  });
+  checks.push(originSync.ok || originSync.skipped);
+  if (originSync.updated && originSync.origins?.length) {
+    output += `${logPrefix} gateway.controlUi.allowedOrigins=${JSON.stringify(originSync.origins)}\n`;
+  }
+
   return { ok: checks.every(Boolean), skipped: false, output };
 }
 
@@ -1241,7 +1441,10 @@ function validatePayload(payload) {
 app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
   try {
     if (isConfigured()) {
-      const synced = await syncGatewayConfigForProxy({ logPrefix: "[setup-config]" });
+      const synced = await syncGatewayConfigForProxy({
+        logPrefix: "[setup-config]",
+        req,
+      });
       await restartGateway();
       return res.json({
         ok: true,
@@ -1310,6 +1513,12 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         ]),
       );
       extra += `[config] gateway.trustedProxies exit=${proxiesResult.code}\n`;
+
+      const originSync = await ensureControlUiAllowedOrigins(req, {
+        logPrefix: "[setup-config]",
+        restartGatewayOnChange: false,
+      });
+      extra += `[config] gateway.controlUi.allowedOrigins exit=${originSync.ok ? 0 : 1}\n`;
 
       if (payload.model?.trim()) {
         extra += `[setup] Setting model to ${payload.model.trim()}...\n`;
@@ -1654,6 +1863,17 @@ app.use(async (req, res) => {
   }
 
   if (isConfigured()) {
+    try {
+      await ensureControlUiAllowedOrigins(req, {
+        logPrefix: "[request-config]",
+        restartGatewayOnChange: true,
+      });
+    } catch (err) {
+      console.warn(
+        `[request-config] failed syncing allowed origins: ${err.message}`,
+      );
+    }
+
     if (!isGatewayReady()) {
       try {
         await ensureGatewayRunning();
@@ -1741,6 +1961,10 @@ server.on("upgrade", async (req, socket, head) => {
     return;
   }
   try {
+    await ensureControlUiAllowedOrigins(req, {
+      logPrefix: "[websocket-config]",
+      restartGatewayOnChange: true,
+    });
     await ensureGatewayRunning();
   } catch (err) {
     console.warn(`[websocket] gateway not ready: ${err.message}`);
