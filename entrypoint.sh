@@ -133,5 +133,7 @@ if [ "${ENABLE_OLLAMA:-false}" = "true" ]; then
   fi
 fi
 
-# ── Start OpenClaw ───────────────────────────────────────────────────
-exec gosu openclaw node "${OPENCLAW_ENTRY:-src/server.js}" "$@"
+# ── Start wrapper server ─────────────────────────────────────────────
+# NOTE: OPENCLAW_ENTRY is used by server.js internally to spawn CLI commands.
+# The entrypoint must always launch the wrapper server, not the CLI.
+exec gosu openclaw node src/server.js "$@"
