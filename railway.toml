@@ -8,3 +8,7 @@ restartPolicyType = "on_failure"
 
 [variables]
 PORT = "8080"
+ENABLE_OLLAMA = "false"
+OLLAMA_HOST = "127.0.0.1:11434"
+OLLAMA_BASE_URL = "http://127.0.0.1:11434/api"
+OLLAMA_MODELS = "/data/ollama/models"

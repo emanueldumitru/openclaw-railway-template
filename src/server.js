@@ -715,6 +715,14 @@ app.get("/setup/api/status", requireSetupAuth, async (_req, res) => {
       options: [{ value: "openrouter-api-key", label: "OpenRouter API key" }],
     },
     {
+      value: "ollama",
+      label: "Ollama",
+      hint: "Local or self-hosted models",
+      options: [
+        { value: "ollama-local", label: "Ollama local runtime (no key needed)" },
+      ],
+    },
+    {
       value: "ai-gateway",
       label: "Vercel AI Gateway",
       hint: "API key",
@@ -921,7 +929,9 @@ function buildOnboardArgs(payload) {
   ];
 
   if (payload.authChoice) {
-    args.push("--auth-choice", payload.authChoice);
+    const onboardAuthChoice =
+      payload.authChoice === "ollama-local" ? "skip" : payload.authChoice;
+    args.push("--auth-choice", onboardAuthChoice);
 
     const secret = (payload.authSecret || "").trim();
     const map = {
@@ -1402,6 +1412,7 @@ const VALID_AUTH_CHOICES = [
   "google-antigravity",
   "google-gemini-cli",
   "openrouter-api-key",
+  "ollama-local",
   "ai-gateway-api-key",
   "moonshot-api-key",
   "kimi-code-api-key",
@@ -1433,6 +1444,15 @@ function validatePayload(payload) {
   for (const field of stringFields) {
     if (payload[field] !== undefined && typeof payload[field] !== "string") {
       return `Invalid ${field}: must be a string`;
+    }
+  }
+  if (payload.authChoice === "ollama-local") {
+    const model = payload.model?.trim() || "";
+    if (!model) {
+      return 'Model is required for Ollama (example: "ollama/llama3.1:8b")';
+    }
+    if (!model.startsWith("ollama/")) {
+      return 'Ollama model must start with "ollama/"';
     }
   }
   return null;
@@ -1519,6 +1539,18 @@ app.post("/setup/api/run", requireSetupAuth, async (req, res) => {
         restartGatewayOnChange: false,
       });
       extra += `[config] gateway.controlUi.allowedOrigins exit=${originSync.ok ? 0 : 1}\n`;
+
+      if (payload.authChoice === "ollama-local") {
+        const resolvedOllamaApiKey =
+          payload.authSecret?.trim() ||
+          process.env.OLLAMA_API_KEY?.trim() ||
+          "ollama-local";
+        process.env.OLLAMA_API_KEY = resolvedOllamaApiKey;
+        const ollamaHost = process.env.OLLAMA_HOST?.trim() || "127.0.0.1:11434";
+        process.env.OLLAMA_BASE_URL =
+          process.env.OLLAMA_BASE_URL?.trim() || `http://${ollamaHost}/api`;
+        extra += `[setup] Ollama provider enabled (OLLAMA_BASE_URL=${process.env.OLLAMA_BASE_URL})\n`;
+      }
 
       if (payload.model?.trim()) {
         extra += `[setup] Setting model to ${payload.model.trim()}...\n`;

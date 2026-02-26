@@ -532,13 +532,13 @@
 
             <div>
               <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">API Key / Token</label>
-              <input x-model="authSecret" type="password" placeholder="Paste your API key or token" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
+              <input x-model="authSecret" type="password" placeholder="Paste your API key or token (optional for Ollama)" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
             </div>
 
             <div>
               <label class="block text-xs uppercase tracking-wide text-neutral-500 font-medium mb-2">Model</label>
-              <input x-model="model" type="text" placeholder="e.g. openai/gpt-4.1, anthropic/claude-sonnet-4" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
-              <p class="text-xs text-neutral-500 dark:text-neutral-600 mt-2">Format: provider/model-name</p>
+              <input x-model="model" type="text" placeholder="e.g. openai/gpt-4.1, anthropic/claude-sonnet-4, ollama/llama3.1" class="w-full bg-neutral-50 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-4 py-3 text-sm placeholder-neutral-400 dark:placeholder-neutral-600 focus:outline-none focus:border-red-500 transition-colors" />
+              <p class="text-xs text-neutral-500 dark:text-neutral-600 mt-2">Format: provider/model-name (for Ollama: <code>ollama/model</code>)</p>
             </div>
 
             <div>

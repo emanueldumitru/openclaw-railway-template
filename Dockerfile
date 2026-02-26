@@ -93,6 +93,15 @@ RUN cd /tmp \
     && install -m 0755 /tmp/gog /usr/local/bin/gog \
     && rm -rf /tmp/gog /tmp/gogcli*
 
+
+# Ollama (self-hosted local model runtime)
+ARG OLLAMA_TARBALL_URL=https://ollama.com/download/ollama-linux-amd64.tgz
+RUN curl -fsSL "$OLLAMA_TARBALL_URL" -o /tmp/ollama-linux-amd64.tgz \
+    && tar -C /usr -xzf /tmp/ollama-linux-amd64.tgz \
+    && chmod +x /usr/bin/ollama \
+    && rm -f /tmp/ollama-linux-amd64.tgz
+
+
 USER openclaw
 
 ENV PORT=8080

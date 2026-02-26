@@ -81,4 +81,51 @@ chown openclaw:openclaw /home/openclaw/.mcporter/mcporter.json
 # Keep Control UI instance identity stable across refreshes.
 node /app/src/patch-control-ui-instance.js || true
 
+if [ "${ENABLE_OLLAMA:-false}" = "true" ]; then
+  OLLAMA_HOST="${OLLAMA_HOST:-127.0.0.1:11434}"
+  OLLAMA_HOST="${OLLAMA_HOST#http://}"
+  OLLAMA_HOST="${OLLAMA_HOST#https://}"
+  export OLLAMA_HOST
+  export OLLAMA_MODELS="${OLLAMA_MODELS:-/data/ollama/models}"
+  export OLLAMA_API_KEY="${OLLAMA_API_KEY:-ollama-local}"
+  export OLLAMA_BASE_URL="${OLLAMA_BASE_URL:-http://$OLLAMA_HOST/api}"
+
+  mkdir -p "$OLLAMA_MODELS"
+  chown -R openclaw:openclaw "$OLLAMA_MODELS"
+
+  echo "[ollama] starting ollama serve on $OLLAMA_HOST"
+  gosu openclaw env \
+    OLLAMA_HOST="$OLLAMA_HOST" \
+    OLLAMA_MODELS="$OLLAMA_MODELS" \
+    OLLAMA_API_KEY="$OLLAMA_API_KEY" \
+    ollama serve >/tmp/ollama.log 2>&1 &
+
+  for _ in $(seq 1 30); do
+    if curl -fsS "http://$OLLAMA_HOST/api/tags" >/dev/null 2>&1; then
+      echo "[ollama] runtime ready"
+      break
+    fi
+    sleep 1
+  done
+
+  if [ -n "${OLLAMA_PULL_MODELS:-}" ]; then
+    OLDIFS="$IFS"
+    IFS=','
+    read -ra OLLAMA_MODELS_TO_PULL <<< "$OLLAMA_PULL_MODELS"
+    IFS="$OLDIFS"
+    for model in "${OLLAMA_MODELS_TO_PULL[@]}"; do
+      model="$(echo "$model" | xargs)"
+      if [ -z "$model" ]; then
+        continue
+      fi
+      echo "[ollama] pulling model: $model"
+      gosu openclaw env \
+        OLLAMA_HOST="$OLLAMA_HOST" \
+        OLLAMA_MODELS="$OLLAMA_MODELS" \
+        OLLAMA_API_KEY="$OLLAMA_API_KEY" \
+        ollama pull "$model" || echo "[ollama] failed to pull model: $model"
+    done
+  fi
+fi
+
 exec gosu openclaw node src/server.js

@@ -7,6 +7,7 @@ This repo packages **OpenClaw** for Railway with a small **/setup** web wizard s
 - **OpenClaw Gateway + Control UI** (served at `/` and `/openclaw`)
 - A friendly **Setup Wizard** at `/setup` (protected by a password)
 - Optional **Web Terminal** at `/tui` for browser-based TUI access
+- Optional **Ollama runtime** for local/self-hosted models
 - Built-in **Proactive Automations** in `/setup` (6-hour updates + daily morning briefing)
 - Persistent state via **Railway Volume** (so config/credentials/memory survive redeploys)
 
@@ -83,6 +84,29 @@ These jobs are managed using OpenClaw cron and persisted in your state volume.
 
 If you migrate from older images and hit volume permission errors, set `FORCE_DATA_RECURSIVE_CHOWN=true` for one deploy, then remove it.
 
+## Ollama integration
+
+The image includes [Ollama](https://ollama.com/) so you can run local models in the same container.
+
+### Enable local Ollama runtime
+
+Set these Railway variables:
+
+- `ENABLE_OLLAMA=true`
+- `OLLAMA_HOST=127.0.0.1:11434` (listen address for local runtime)
+- `OLLAMA_BASE_URL=http://127.0.0.1:11434/api` (OpenClaw provider endpoint)
+- `OLLAMA_MODELS=/data/ollama/models` (recommended for persistent model cache)
+- `OLLAMA_API_KEY=ollama-local` (any non-empty value works for local Ollama)
+- `OLLAMA_PULL_MODELS=llama3.1:8b` (optional, comma-separated models to pre-pull at boot)
+
+Then in `/setup`:
+
+1. Select provider group **Ollama**
+2. Select auth method **Ollama local runtime (no key needed)**
+3. Set model to something like `ollama/llama3.1:8b`
+
+If you already run Ollama externally, keep `ENABLE_OLLAMA=false` and set only `OLLAMA_BASE_URL` (for example `http://my-ollama-host:11434/api`).
+
 ## Local testing
 
 ```bash
@@ -92,6 +116,8 @@ docker run --rm -p 8080:8080 \
   -e PORT=8080 \
   -e SETUP_PASSWORD=test \
   -e ENABLE_WEB_TUI=true \
+  -e ENABLE_OLLAMA=true \
+  -e OLLAMA_PULL_MODELS=llama3.1:8b \
   -e OPENCLAW_STATE_DIR=/data/.openclaw \
   -e OPENCLAW_WORKSPACE_DIR=/data/workspace \
   -v $(pwd)/.tmpdata:/data \
@@ -127,7 +153,7 @@ A: Use the OpenClaw CLI to switch models. Access the web terminal at `/tui` (if 
 openclaw models set provider/model-id
 ```
 
-For example: `openclaw models set anthropic/claude-sonnet-4-20250514` or `openclaw models set openai/gpt-4-turbo`. Use `openclaw models list --all` to see available models.
+For example: `openclaw models set anthropic/claude-sonnet-4-20250514`, `openclaw models set openai/gpt-4-turbo`, or `openclaw models set ollama/llama3.1:8b`. Use `openclaw models list --all` to see available models.
 
 **Q: My config seems broken or I'm getting strange errors. How do I fix it?**
 
