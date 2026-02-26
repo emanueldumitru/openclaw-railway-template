@@ -10,6 +10,7 @@ RUN apt-get update \
     git \
     gosu \
     procps \
+    zstd \
     awscli \
     build-essential \
     libsecret-1-0 \
@@ -95,11 +96,10 @@ RUN cd /tmp \
 
 
 # Ollama (self-hosted local model runtime)
-ARG OLLAMA_TARBALL_URL=https://ollama.com/download/ollama-linux-amd64.tgz
-RUN curl -fsSL "$OLLAMA_TARBALL_URL" -o /tmp/ollama-linux-amd64.tgz \
-    && tar -C /usr -xzf /tmp/ollama-linux-amd64.tgz \
-    && chmod +x /usr/bin/ollama \
-    && rm -f /tmp/ollama-linux-amd64.tgz
+ARG OLLAMA_TARBALL_URL=https://ollama.com/download/ollama-linux-amd64.tar.zst
+RUN curl -fsSL "$OLLAMA_TARBALL_URL" \
+    | tar x -C /usr \
+    && chmod +x /usr/bin/ollama
 
 
 USER openclaw
