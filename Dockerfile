@@ -96,9 +96,8 @@ RUN cd /tmp \
 
 
 # Ollama (self-hosted local model runtime)
-ARG OLLAMA_TARBALL_URL=https://ollama.com/download/ollama-linux-amd64.tar.zst
-RUN curl -fsSL "$OLLAMA_TARBALL_URL" \
-    | tar x -C /usr \
+RUN curl -fsSL "https://ollama.com/download/ollama-linux-amd64.tar.zst" \
+    | tar -I zstd -xvf - -C /usr \
     && chmod +x /usr/bin/ollama
 
 
