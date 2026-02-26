@@ -39,27 +39,28 @@ RUN corepack enable \
   && pnpm store prune
 
 # Static binaries — download ALL in parallel into /opt/bin
-# NOTE: requires bash for & backgrounding and brace expansion
+# NOTE: requires bash for background subshells
 SHELL ["/bin/bash", "-c"]
-RUN mkdir -p /opt/bin /tmp/ffmpeg /tmp/gh \
+RUN set -eo pipefail \
+  && mkdir -p /opt/bin /tmp/ffmpeg /tmp/gh \
   && ( curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
          | tar -xJ --strip-components=1 -C /tmp/ffmpeg \
        && mv /tmp/ffmpeg/ffmpeg /tmp/ffmpeg/ffprobe /opt/bin/ ) & \
-  && ( GH_VERSION=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest \
+     ( GH_VERSION=$(curl -fsSL https://api.github.com/repos/cli/cli/releases/latest \
          | grep -oP '"tag_name":\s*"v\K[^"]+') \
        && curl -fsSL "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_amd64.tar.gz" \
          | tar -xz --strip-components=1 -C /tmp/gh \
        && mv /tmp/gh/bin/gh /opt/bin/ ) & \
-  && ( curl -fsSL "https://github.com/steipete/gogcli/releases/download/v0.11.0/gogcli_0.11.0_linux_amd64.tar.gz" \
+     ( curl -fsSL "https://github.com/steipete/gogcli/releases/download/v0.11.0/gogcli_0.11.0_linux_amd64.tar.gz" \
          | tar -xz -C /tmp \
        && mv /tmp/gog /opt/bin/ ) & \
-  && ( curl -fsSL "https://ollama.com/download/ollama-linux-amd64.tar.zst" \
+     ( curl -fsSL "https://ollama.com/download/ollama-linux-amd64.tar.zst" \
          | tar -I zstd -xf - -C /tmp \
        && mv /tmp/bin/ollama /opt/bin/ ) & \
-  && ( curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscli.zip \
+     ( curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o /tmp/awscli.zip \
        && unzip -q /tmp/awscli.zip -d /tmp/awscli \
        && /tmp/awscli/aws/install --install-dir /usr/local/aws-cli --bin-dir /opt/bin ) & \
-  && wait \
+     wait \
   && chmod +x /opt/bin/* \
   && rm -rf /tmp/*
 
