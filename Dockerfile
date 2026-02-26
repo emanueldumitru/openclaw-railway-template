@@ -13,6 +13,7 @@ RUN apt-get update \
     python3 \
     libsecret-1-dev \
     curl \
+    git \
     ca-certificates \
     unzip \
     zstd \
