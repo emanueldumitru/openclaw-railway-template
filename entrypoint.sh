@@ -16,8 +16,14 @@ if [ "${FORCE_DATA_RECURSIVE_CHOWN:-false}" = "true" ]; then
 fi
 chmod 700 /data
 
+# Pre-create state + workspace dirs so nothing runs as root creates them
+STATE_DIR="${OPENCLAW_STATE_DIR:-/data/.openclaw}"
+WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-${STATE_DIR}/workspace}"
+mkdir -p "$STATE_DIR" "$WORKSPACE_DIR"
+chown openclaw:openclaw "$STATE_DIR" "$WORKSPACE_DIR"
+
 # ── Seed bundled skills into workspace ───────────────────────────────
-SKILLS_DIR="${OPENCLAW_WORKSPACE_DIR:-/data/workspace}/skills"
+SKILLS_DIR="${WORKSPACE_DIR}/skills"
 mkdir -p "$SKILLS_DIR"
 if [ -d /app/skills ]; then
   shopt -s nullglob
@@ -72,6 +78,7 @@ JSON
 chown openclaw:openclaw /home/openclaw/.mcporter/mcporter.json
 
 # ── Patch control UI instance identity ───────────────────────────────
+# Runs as root (writes to /usr/local/lib/node_modules/... which is root-owned)
 node /app/src/patch-control-ui-instance.js 2>/dev/null || true
 
 # ── Ollama (optional local model runtime) ────────────────────────────
