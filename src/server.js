@@ -241,6 +241,10 @@ let controlUiOriginsSync = null;
 const syncedControlUiOrigins = new Set();
 const GATEWAY_RECOVERY_COOLDOWN_MS = 5000;
 
+// FIX #2: Debounced origin sync — run at most once per 60s, not per-request.
+let lastOriginSyncAt = 0;
+const ORIGIN_SYNC_INTERVAL_MS = 60_000;
+
 function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -399,6 +403,16 @@ async function ensureControlUiAllowedOrigins(req, opts = {}) {
   };
 }
 
+// FIX #2: Debounced wrapper — only spawns child process if interval elapsed.
+async function maybeEnsureControlUiAllowedOrigins(req, opts = {}) {
+  const now = Date.now();
+  if (now - lastOriginSyncAt < ORIGIN_SYNC_INTERVAL_MS) {
+    return { ok: true, skipped: true, updated: false, origins: [] };
+  }
+  lastOriginSyncAt = now;
+  return ensureControlUiAllowedOrigins(req, opts);
+}
+
 async function ensureGatewayConfig() {
   if (!isConfigured()) return;
   console.log("[gateway] enforcing critical config settings...");
@@ -500,11 +514,13 @@ async function startGateway() {
     gatewayProc = null;
   });
 
+  // FIX #3: Gate auto-restart behind a flag so manual kill+restart doesn't race.
   gatewayProc.on("exit", (code, signal) => {
     console.error(`[gateway] exited code=${code} signal=${signal}`);
     gatewayHealthy = false;
+    const wasManualRestart = gatewayProc?._manualRestart;
     gatewayProc = null;
-    if (!shuttingDown && isConfigured()) {
+    if (!shuttingDown && !wasManualRestart && isConfigured()) {
       console.log("[gateway] scheduling auto-restart in 2s...");
       setTimeout(() => {
         if (!shuttingDown && !gatewayProc && isConfigured()) {
@@ -523,11 +539,13 @@ async function ensureGatewayRunning() {
     return { ok: true };
   }
 
+  // FIX #3: Mark the process as manually restarted to prevent exit handler race.
   if (gatewayProc && gatewayStarting === null && !gatewayHealthy) {
     console.warn(
       "[gateway] process exists but is marked unhealthy, restarting gateway...",
     );
     try {
+      gatewayProc._manualRestart = true;
       gatewayProc.kill("SIGTERM");
     } catch (err) {
       console.warn(`[gateway] restart kill error: ${err.message}`);
@@ -563,6 +581,8 @@ async function restartGateway() {
   gatewayHealthy = false;
   if (gatewayProc) {
     try {
+      // FIX #3: Prevent exit handler from scheduling a competing auto-restart.
+      gatewayProc._manualRestart = true;
       gatewayProc.kill("SIGTERM");
     } catch (err) {
       console.warn(`[gateway] kill error: ${err.message}`);
@@ -1881,6 +1901,7 @@ proxy.on("error", (err, _req, resOrSocket) => {
   }
 });
 
+// FIX #1: Auth token injected via header only — never in URL.
 proxy.on("proxyReq", (proxyReq, req, res) => {
   proxyReq.setHeader("Authorization", `Bearer ${OPENCLAW_GATEWAY_TOKEN}`);
 });
@@ -1895,8 +1916,9 @@ app.use(async (req, res) => {
   }
 
   if (isConfigured()) {
+    // FIX #2: Debounced — only syncs origins at most once per 60s, not per-request.
     try {
-      await ensureControlUiAllowedOrigins(req, {
+      await maybeEnsureControlUiAllowedOrigins(req, {
         logPrefix: "[request-config]",
         restartGatewayOnChange: true,
       });
@@ -1923,14 +1945,10 @@ app.use(async (req, res) => {
     }
   }
 
-  if (
-    req.path.startsWith("/openclaw") &&
-    !req.query.token &&
-    !/\.\w+$/.test(req.path)
-  ) {
-    const separator = req.url.includes("?") ? "&" : "?";
-    return res.redirect(`${req.path}${separator}token=${OPENCLAW_GATEWAY_TOKEN}`);
-  }
+  // FIX #1: Removed token-in-URL redirect for /openclaw.
+  // The proxy already injects Authorization header in proxyReq/proxyReqWs events.
+  // Putting the token in the query string leaks it to browser history, logs, and
+  // any analytics/CDN sitting in front of Railway.
 
   return proxy.web(req, res, { target: GATEWAY_TARGET });
 });
@@ -1993,7 +2011,8 @@ server.on("upgrade", async (req, socket, head) => {
     return;
   }
   try {
-    await ensureControlUiAllowedOrigins(req, {
+    // FIX #2: Debounced origin sync for WebSocket upgrades too.
+    await maybeEnsureControlUiAllowedOrigins(req, {
       logPrefix: "[websocket-config]",
       restartGatewayOnChange: true,
     });
@@ -2006,6 +2025,7 @@ server.on("upgrade", async (req, socket, head) => {
   proxy.ws(req, socket, head, { target: GATEWAY_TARGET });
 });
 
+// FIX #4: Null-safe graceful shutdown — pty may be null, gatewayProc may already be gone.
 async function gracefulShutdown(signal) {
   console.log(`[wrapper] received ${signal}, shutting down`);
   shuttingDown = true;
@@ -2016,23 +2036,27 @@ async function gracefulShutdown(signal) {
 
   if (activeTuiSession) {
     try {
-      activeTuiSession.ws.close(1001, "Server shutting down");
-      activeTuiSession.pty.kill();
+      activeTuiSession.ws?.close(1001, "Server shutting down");
+    } catch {}
+    try {
+      activeTuiSession.pty?.kill();
     } catch {}
     activeTuiSession = null;
   }
 
   server.close();
 
-  if (gatewayProc) {
+  const proc = gatewayProc;
+  if (proc) {
     try {
-      gatewayProc.kill("SIGTERM");
+      proc._manualRestart = true;
+      proc.kill("SIGTERM");
       await Promise.race([
-        new Promise((resolve) => gatewayProc.on("exit", resolve)),
-        new Promise((resolve) => setTimeout(resolve, 2000)),
+        new Promise((resolve) => proc.on("exit", resolve)),
+        sleep(2000),
       ]);
-      if (gatewayProc && !gatewayProc.killed) {
-        gatewayProc.kill("SIGKILL");
+      if (!proc.killed) {
+        proc.kill("SIGKILL");
       }
     } catch (err) {
       console.warn(`[wrapper] error killing gateway: ${err.message}`);
