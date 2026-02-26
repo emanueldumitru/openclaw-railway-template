@@ -39,7 +39,9 @@ RUN corepack enable \
   && pnpm store prune
 
 # Static binaries — download ALL in parallel into /opt/bin
-RUN mkdir -p /opt/bin /tmp/{ffmpeg,gh} \
+# NOTE: requires bash for & backgrounding and brace expansion
+SHELL ["/bin/bash", "-c"]
+RUN mkdir -p /opt/bin /tmp/ffmpeg /tmp/gh \
   && ( curl -fsSL https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz \
          | tar -xJ --strip-components=1 -C /tmp/ffmpeg \
        && mv /tmp/ffmpeg/ffmpeg /tmp/ffmpeg/ffprobe /opt/bin/ ) & \
@@ -60,6 +62,9 @@ RUN mkdir -p /opt/bin /tmp/{ffmpeg,gh} \
   && wait \
   && chmod +x /opt/bin/* \
   && rm -rf /tmp/*
+
+# Reset to default shell for remaining stages
+SHELL ["/bin/sh", "-c"]
 
 
 ###############################################################################
