@@ -20,7 +20,8 @@ chmod 700 /data
 STATE_DIR="${OPENCLAW_STATE_DIR:-/data/.openclaw}"
 WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-${STATE_DIR}/workspace}"
 mkdir -p "$STATE_DIR" "$WORKSPACE_DIR"
-chown openclaw:openclaw "$STATE_DIR" "$WORKSPACE_DIR"
+chown -R openclaw:openclaw "$STATE_DIR"
+chown openclaw:openclaw "$WORKSPACE_DIR"
 
 # ── Seed bundled skills into workspace ───────────────────────────────
 SKILLS_DIR="${WORKSPACE_DIR}/skills"
