@@ -48,6 +48,35 @@ function resolveGatewayToken() {
 const OPENCLAW_GATEWAY_TOKEN = resolveGatewayToken();
 process.env.OPENCLAW_GATEWAY_TOKEN = OPENCLAW_GATEWAY_TOKEN;
 
+// Railway Object Storage injects AWS_* env vars (endpoint, key, secret, bucket, region).
+// These are NOT real AWS/Bedrock credentials — they point at Railway's S3-compatible store.
+// If OpenClaw sees them it tries Bedrock model discovery, hits the Railway endpoint, and
+// gets XML back instead of JSON → noisy "[bedrock-discovery] Failed to list models" errors.
+// Strip them from any environment we hand to OpenClaw processes.
+const RAILWAY_AWS_VARS = [
+  "AWS_ENDPOINT_URL",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_S3_BUCKET_NAME",
+  "AWS_DEFAULT_REGION",
+  "AWS_REGION",
+];
+
+function openclawEnv(extra = {}) {
+  const env = { ...process.env };
+  // Only strip if credentials are Railway Object Storage (indicated by AWS_ENDPOINT_URL
+  // pointing at a non-AWS endpoint, or AWS_S3_BUCKET_NAME being set — real Bedrock users
+  // would never set those).
+  if (env.AWS_ENDPOINT_URL || env.AWS_S3_BUCKET_NAME) {
+    for (const key of RAILWAY_AWS_VARS) {
+      delete env[key];
+    }
+  }
+  env.OPENCLAW_STATE_DIR = STATE_DIR;
+  env.OPENCLAW_WORKSPACE_DIR = WORKSPACE_DIR;
+  return { ...env, ...extra };
+}
+
 let cachedOpenclawVersion = null;
 let cachedChannelsHelp = null;
 
@@ -491,11 +520,7 @@ async function startGateway() {
 
   gatewayProc = childProcess.spawn(OPENCLAW_NODE, clawArgs(args), {
     stdio: "inherit",
-    env: {
-      ...process.env,
-      OPENCLAW_STATE_DIR: STATE_DIR,
-      OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-    },
+    env: openclawEnv(),
   });
 
   const safeArgs = args.map((arg, i) =>
@@ -985,11 +1010,7 @@ function runCmd(cmd, args, opts = {}) {
   return new Promise((resolve) => {
     const proc = childProcess.spawn(cmd, args, {
       ...opts,
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: STATE_DIR,
-        OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-      },
+      env: openclawEnv(opts.env),
     });
 
     let out = "";
@@ -1786,12 +1807,7 @@ function createTuiWebSocketServer(httpServer) {
         cols,
         rows,
         cwd: WORKSPACE_DIR,
-        env: {
-          ...process.env,
-          OPENCLAW_STATE_DIR: STATE_DIR,
-          OPENCLAW_WORKSPACE_DIR: WORKSPACE_DIR,
-          TERM: "xterm-256color",
-        },
+        env: openclawEnv({ TERM: "xterm-256color" }),
       });
 
       if (activeTuiSession) {
